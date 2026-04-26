@@ -57,7 +57,6 @@ class LAQTrainer(nn.Module):
         batch_size,
         folder,
         depth_folder = None,
-        z_rgb_folder = None,
         traj_info=None,
         train_on_images = False,
         lr = 3e-4,
@@ -74,11 +73,8 @@ class LAQTrainer(nn.Module):
         accelerate_kwargs: dict = dict(),
         weights = None,
         offsets = None,
-        modality = 'rgb',
     ):
         super().__init__()
-        self.modality = modality
-        
         image_size = vae.image_size
 
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters = True)
@@ -121,7 +117,7 @@ class LAQTrainer(nn.Module):
         
         
         # sthv2 training
-        self.ds = ImageVideoDataset(folder, depth_folder, z_rgb_folder, image_size, offset=offsets)
+        self.ds = ImageVideoDataset(folder, depth_folder, image_size, offset=offsets)
 
         self.valid_ds = self.ds
 
@@ -175,18 +171,6 @@ class LAQTrainer(nn.Module):
 
         self.results_folder.mkdir(parents = True, exist_ok = True)
 
-    def _select_input(self, rgb, depth, device):
-        if self.modality == 'rgb':
-            return rgb.to(device)
-
-        if self.modality == 'depth':
-            return depth.to(device)
-        
-        if self.modality == 'both':
-            return rgb.to(device), depth.to(device)
-
-        raise ValueError(f'Unsupported modality: {self.modality}')
-        
     def save(self, path):
         if not self.accelerator.is_local_main_process:
             return
@@ -209,44 +193,6 @@ class LAQTrainer(nn.Module):
         pkg['dl_iter_state'] = self.get_dl_state(self.dl_iter)
 
         torch.save(pkg, path)
-
-    def save_token_embed_only(self, path):
-        if not self.accelerator.is_local_main_process:
-            return
-
-        unwrapped_vae = self.accelerator.unwrap_model(self.vae)
-
-        pkg = {
-            "type": "case3_token_embed_only",
-            "rgb_token_embed": unwrapped_vae.rgb_token_embed.state_dict(),
-            "meta": {
-                "dim": unwrapped_vae.dim,
-                "codebook_size": unwrapped_vae.codebook_size,
-                "code_seq_len": unwrapped_vae.code_seq_len,
-            }
-        }
-
-        torch.save(pkg, path)
-
-
-    def save_adapter_only(self, path):
-        if not self.accelerator.is_local_main_process:
-            return
-
-        unwrapped_vae = self.accelerator.unwrap_model(self.vae)
-
-        pkg = {
-            "rgb_token_embed": unwrapped_vae.rgb_token_embed.state_dict(),
-            "geometry_adapter": unwrapped_vae.geometry_adapter.state_dict(),
-            "meta": {
-                "dim": unwrapped_vae.dim,
-                "codebook_size": unwrapped_vae.codebook_size,
-                "code_seq_len": unwrapped_vae.code_seq_len,
-            }
-        }
-
-        torch.save(pkg, path)
-        
 
     def load(self, path):
         path = Path(path)
@@ -294,31 +240,15 @@ class LAQTrainer(nn.Module):
         # update vae (generator)
 
         for _ in range(self.grad_accum_every):
+            img, depth = next(self.dl_iter)
+            img = depth
+            img = img.to(device)
 
-            rgb, depth, z_rgb = next(self.dl_iter)
-            data = self._select_input(rgb, depth, device)
-
-            if self.modality in ['rgb', 'depth']:
-                loss, num_unique_indices = self.vae(
-                    video = data,
-                    step=steps,
-                )
-            elif self.modality == 'both':
-                rgb, depth = data
-                data = depth
-                decoder_video = depth # rgb
-                
-                loss, num_unique_indices = self.vae(
-                    video=data,
-                    decoder_video=decoder_video,
-                    z_rgb = z_rgb,
-                    depth=depth,
-                    step=steps,
-                )
-
-            else:
-                raise ValueError(f'Unsupported modality: {self.modality}')
-
+            # with self.accelerator.autocast():
+            loss, num_unique_indices = self.vae(
+                img,
+                step=steps,
+            )
 
             self.accelerator.backward(loss / self.grad_accum_every)
 
@@ -347,32 +277,17 @@ class LAQTrainer(nn.Module):
             for model, filename in vaes_to_evaluate:
                 model.eval()
 
-                valid_rgb, valid_depth, z_rgb = next(self.valid_dl_iter)
+                valid_data, depth_data = next(self.valid_dl_iter)
+                valid_data = depth_data
 
-                valid_data = self._select_input(valid_rgb, valid_depth, device)
+                valid_data = valid_data.to(device)
 
-                if self.modality in ['rgb', 'depth']:
-                    recons = model(video=valid_data, return_recons_only=True)
-
-                elif self.modality == 'both':
-                    valid_rgb, valid_depth = valid_data
-                    valid_data = valid_depth
-                    decoder_video = valid_depth # valid_rgb
-      
-                    recons = model(
-                        video=valid_data,
-                        decoder_video=decoder_video,
-                        depth=valid_depth,
-                        z_rgb = z_rgb,
-                        return_recons_only=True
-                    )
-
-                else:
-                    raise ValueError(f'Unsupported modality: {self.modality}')
+                recons = model(valid_data, return_recons_only = True)
 
 
                 if self.train_on_images:
                     imgs_and_recons = torch.stack((valid_data, recons), dim = 0)
+                    # imgs_and_recons = torch.stack((valid_data, recons), dim = 0)
                     imgs_and_recons = rearrange(imgs_and_recons, 'r b ... -> (b r) ...')
 
                     imgs_and_recons = imgs_and_recons.detach().cpu().float().clamp(0., 1.)
@@ -393,20 +308,6 @@ class LAQTrainer(nn.Module):
 
                     save_image(grid, str(self.results_folder / f'{filename}.png'))
 
-                    if decoder_video is not None:
-                        imgs_and_recons = torch.stack((decoder_video[:,:,0],decoder_video[:,:,-1], recons), dim = 0)
-                        # imgs_and_recons = torch.stack((valid_data, recons), dim = 0)
-                        imgs_and_recons = rearrange(imgs_and_recons, 'r b ... -> (b r) ...')
-
-                        imgs_and_recons = imgs_and_recons.detach().cpu().float().clamp(0., 1.)
-                        grid = make_grid(imgs_and_recons, nrow = 3, normalize = True, value_range = (0, 1))
-
-                        logs['reconstructions'] = grid
-
-                        save_image(grid, str(self.results_folder / f'{filename}_decoder.png'))
-
-
-
             self.print(f'{steps}: saving to {str(self.results_folder)}')
         # save model every so often
 
@@ -417,11 +318,6 @@ class LAQTrainer(nn.Module):
             state_dict = self.vae.state_dict()
             model_path = str(self.results_folder / f'vae.{steps}.pt')
             torch.save(state_dict, model_path)
-
-            # save adapter-only checkpoint for plugging into VLA
-            adapter_path = str(self.results_folder / f'token_embed.{steps}.pt')
-            self.save_token_embed_only(adapter_path)
-
 
             if self.use_ema:
                 ema_state_dict = self.ema_vae.state_dict()

@@ -1,0 +1,114 @@
+Warning: files have different numbers of samples. RGB=12938, depth=145918. Using first 12938 samples.
+Aligned by line order
+Samples before selection: 12938
+Selected samples: 1000/12938
+z_rgb shape             : (1000, 4)
+z_depth shape           : (1000, 4)
+First RGB delta         : [0, 7, 4, 2]
+First depth delta       : [5, 5, 5, 2]
+
+========================================================================
+Discrete Information Analysis: delta_depth vs delta_rgb
+========================================================================
+
+Basic statistics
+  Number of samples                 = 1000
+  Unique delta_rgb states            = 141
+  Unique delta_depth states          = 210
+  Unique joint states                = 435
+  Full delta match rate              =    0.00%
+
+Token match rate by position
+  Position 0                        =   13.70%
+  Position 1                        =    9.10%
+  Position 2                        =   11.30%
+  Position 3                        =   15.30%
+
+------------------------------------------------------------------------
+Marginal entropies
+------------------------------------------------------------------------
+  H(delta_rgb)                      =   3.7073 nats
+  H(delta_depth)                    =   4.6691 nats
+
+------------------------------------------------------------------------
+Shared / redundant information
+------------------------------------------------------------------------
+  I(delta_depth; delta_rgb)         =   2.7983 nats
+  Redundancy ratio                  =   59.93% of H(delta_depth)
+  Verdict                           = MODERATE: substantial overlap
+
+------------------------------------------------------------------------
+Unique / novel information
+------------------------------------------------------------------------
+  H(delta_depth | delta_rgb)        =   1.8708 nats
+  H(delta_rgb | delta_depth)        =   0.9090 nats
+  Novelty ratio                     =   40.07% of H(delta_depth)
+
+------------------------------------------------------------------------
+Does concat(depth, RGB) add information over RGB?
+------------------------------------------------------------------------
+  H(delta_rgb)                      =   3.7073 nats
+  H(delta_depth, delta_rgb)         =   5.5781 nats
+  Information gain                  =   1.8708 nats
+  Relative gain                     =   50.46%
+  Verdict                           = LARGE: concat is substantially richer than RGB alone
+========================================================================
+
+(lapa) linhkastner@MDG-104-174:~/lapa/LAPA/scripts$ bash latent_info_analysis.sh 
+Warning: files have different numbers of samples. RGB=13229, depth=145918. Using first 13229 samples.
+Aligned by line order
+Samples before selection: 13229
+Selected samples: 13000/13229
+z_rgb shape             : (13000, 4)
+z_depth shape           : (13000, 4)
+First RGB delta         : [0, 7, 4, 2]
+First depth delta       : [5, 5, 5, 2]
+
+========================================================================
+Discrete Information Analysis: delta_depth vs delta_rgb
+========================================================================
+
+Basic statistics
+  Number of samples                 = 13000
+  Unique delta_rgb states            = 853
+  Unique delta_depth states          = 1501
+  Unique joint states                = 5191
+  Full delta match rate              =    0.18%
+
+Token match rate by position
+  Position 0                        =    9.65%
+  Position 1                        =   10.56%
+  Position 2                        =   13.08%
+  Position 3                        =   16.59%
+
+------------------------------------------------------------------------
+Marginal entropies
+------------------------------------------------------------------------
+  H(delta_rgb)                      =   4.6546 nats
+  H(delta_depth)                    =   6.2641 nats
+
+------------------------------------------------------------------------
+Shared / redundant information
+------------------------------------------------------------------------
+  I(delta_depth; delta_rgb)         =   2.9821 nats
+  Redundancy ratio                  =   47.61% of H(delta_depth)
+  Verdict                           = MODERATE: substantial overlap
+
+------------------------------------------------------------------------
+Unique / novel information
+------------------------------------------------------------------------
+  H(delta_depth | delta_rgb)        =   3.2820 nats
+  H(delta_rgb | delta_depth)        =   1.6725 nats
+  Novelty ratio                     =   52.39% of H(delta_depth)
+
+------------------------------------------------------------------------
+Does concat(depth, RGB) add information over RGB?
+------------------------------------------------------------------------
+  H(delta_rgb)                      =   4.6546 nats
+  H(delta_depth, delta_rgb)         =   7.9366 nats
+  Information gain                  =   3.2820 nats
+  Relative gain                     =   70.51%
+  Verdict                           = LARGE: concat is substantially richer than RGB alone
+========================================================================
+
+(lapa) linhkastner@MDG-104-174:~/lapa/LAPA/scripts$ 

@@ -1,9 +1,11 @@
 
+mkdir -p logs
+nohup bash -lc 'source ~/miniconda3/etc/profile.d/conda.sh && conda activate lapa && CUDA_VISIBLE_DEVICES=2 \
   python3 inference_sthv2.py \
-    --input_file /datasets/something-something-v2/nips/depth_train.jsonl \
+    --input_file /home/linhkastner/philo/datasets/ssv2/depth_val.jsonl \
     --dist_number 1 \
     --codebook_size 8 \
-    --laq_checkpoint /workspace/lapa/laq/results/laq/results/vae.10500.pt \
+    --laq_checkpoint /home/linhkastner/lapa/LAPA/laq/results/vae.25000.pt \
     --divider 1 \
     --window_size 30 \
     --code_seq_len 4 \
@@ -11,6 +13,6 @@
     --repeat_depth_to_3ch 1 \
     --debug_save_dir outputs/debug_depth \
     --debug_num_samples 10 \
-    --unshuffled_jsonl /datasets/something-something-v2/nips/z_depth_train.jsonl
+    --unshuffled_jsonl /home/linhkastner/philo/datasets/ssv2/z_depth_val.jsonl' > logs/lapa_inference_depth_val2.log 2>&1 < /dev/null &
 
 

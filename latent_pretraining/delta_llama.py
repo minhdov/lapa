@@ -447,13 +447,7 @@ class FlaxDeltaLaMAForCausalLMModule(nn.Module):
             return_dict=return_dict,
         )
 
-        hidden_states = outputs[0] # Minh: get z latent action
-        print("hidden_states shape:", hidden_states.shape)
-
-        delta_mask = delta_masks.astype(bool)
-        print("delta_masks shape:", delta_masks.shape)
-        print("num delta tokens:", delta_mask.sum(axis=1))
-
+        hidden_states = outputs[0]
 
         if self.config.tie_vision_embeddings:
             shared_kernel = self.transformer.variables["params"]["vte"]["embedding"].T

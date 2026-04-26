@@ -2,6 +2,7 @@ import os
 import json
 import argparse
 import time
+import re
 from typing import Optional, Dict, List
 
 import numpy as np
@@ -38,7 +39,7 @@ def load_all_labels(label_root: str) -> Dict[str, Dict[str, str]]:
     """
     Return:
         {
-            "1": {"instruction": "...", "split": "train"},
+            # "1": {"instruction": "...", "split": "train"},
             "2": {"instruction": "...", "split": "validation"},
             ...
         }
@@ -68,12 +69,21 @@ def load_all_labels(label_root: str) -> Dict[str, Dict[str, str]]:
     return id_to_meta
 
 
+def natural_key(filename: str):
+    """Sort frames numerically when filenames contain frame indices."""
+    stem = os.path.splitext(filename)[0]
+    m = re.search(r"(\d+)", stem)
+    if m:
+        return int(m.group(1))
+    return stem
+
+
 def sorted_frame_files(frame_dir: str) -> List[str]:
     files = [
         f for f in os.listdir(frame_dir)
         if f.lower().endswith((".jpg", ".jpeg", ".png"))
     ]
-    files.sort()
+    files.sort(key=natural_key)
     return files
 
 
@@ -113,7 +123,7 @@ def main():
     parser.add_argument("--dataset_root", type=str, default="something-something-v2")
     parser.add_argument("--frames_dirname", type=str, default="frames_10")
     parser.add_argument("--labels_dirname", type=str, default="labels")
-    parser.add_argument("--output_dirname", type=str, default="z_rgb_indices_stage2_val")
+    parser.add_argument("--unshuffled_jsonl", type=str, required=True, help="Output JSONL path")
     parser.add_argument("--debug_dirname", type=str, default="z_rgb_indices_stage2_val_debug")
     parser.add_argument("--save_debug_json", action="store_true")
     parser.add_argument("--debug_max_videos", type=int, default=20)
@@ -127,7 +137,7 @@ def main():
     parser.add_argument("--multi_image", type=int, default=1)
     parser.add_argument("--jax_distributed", type=dict, default=JaxDistributedConfig.get_default_config())
     parser.add_argument("--seed", type=int, default=1234)
-    parser.add_argument("--mesh_dim", type=str, default="1,-1,1,1")
+    parser.add_argument("--mesh_dim", type=str, default="1,1,1,1")
     parser.add_argument("--dtype", type=str, default="bf16")
     parser.add_argument("--load_llama_config", type=str, default="7b")
     parser.add_argument(
@@ -167,10 +177,12 @@ def main():
     dataset_root = args.dataset_root
     frames_root = os.path.join(dataset_root, args.frames_dirname)
     labels_root = os.path.join(dataset_root, args.labels_dirname)
-    output_root = os.path.join(dataset_root, args.output_dirname)
+    unshuffled_jsonl = args.unshuffled_jsonl
     debug_root = os.path.join(dataset_root, args.debug_dirname)
 
-    os.makedirs(output_root, exist_ok=True)
+    parent_dir = os.path.dirname(unshuffled_jsonl)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
     if args.save_debug_json:
         os.makedirs(debug_root, exist_ok=True)
 
@@ -188,72 +200,82 @@ def main():
         video_ids = video_ids[:args.max_videos]
 
     debug_count = 0
+    total_written = 0
 
-    for idx, video_id in enumerate(video_ids):
-        if video_id not in id_to_meta:
-            print(f"[Skip] video_id={video_id} not found in train/validation label files")
-            continue
+    with open(unshuffled_jsonl, "w", encoding="utf-8") as fout:
+        for idx, video_id in enumerate(video_ids):
+            if video_id not in id_to_meta:
+                print(f"[Skip] video_id={video_id} not found in train/validation label files")
+                continue
 
-        npz_path = os.path.join(output_root, f"{video_id}.npz")
-        if args.skip_existing and os.path.exists(npz_path):
-            print(f"[Skip] {video_id}.npz already exists")
-            continue
+            frame_dir = os.path.join(frames_root, video_id)
+            frame_files = sorted_frame_files(frame_dir)
 
-        frame_dir = os.path.join(frames_root, video_id)
-        frame_files = sorted_frame_files(frame_dir)
+            if len(frame_files) == 0:
+                print(f"[Skip] video_id={video_id} has no frames")
+                continue
 
-        if len(frame_files) == 0:
-            print(f"[Skip] video_id={video_id} has no frames")
-            continue
+            instruction = id_to_meta[video_id]["instruction"]
+            split = id_to_meta[video_id]["split"]
 
-        instruction = id_to_meta[video_id]["instruction"]
-        split = id_to_meta[video_id]["split"]
+            z_rgb_indices = []
+            video_written = 0
+            t_start = time.time()
 
-        z_rgb_indices = []
+            for frame_name in frame_files:
+                frame_path = os.path.join(frame_dir, frame_name)
+                abs_frame_path = os.path.abspath(frame_path)
+                image = load_rgb_image(abs_frame_path, args.image_size)
 
-        t_start = time.time()
-        for frame_name in frame_files:
-            frame_path = os.path.join(frame_dir, frame_name)
-            image = load_rgb_image(frame_path, args.image_size)
+                latent_action = lapa.inference(image, instruction)
 
-            latent_action = lapa.inference(image, instruction)
+                if isinstance(latent_action, np.ndarray):
+                    latent_ids = latent_action.astype(np.int16).tolist()
+                else:
+                    latent_ids = np.array(latent_action, dtype=np.int16).tolist()
 
-            if isinstance(latent_action, np.ndarray):
-                latent_ids = latent_action.astype(np.int16).tolist()
-            else:
-                latent_ids = np.array(latent_action, dtype=np.int16).tolist()
+                if len(latent_ids) == 1 and isinstance(latent_ids[0], list):
+                    latent_ids = latent_ids[0]
 
-            if len(latent_ids) == 1 and isinstance(latent_ids[0], list):
-                latent_ids = latent_ids[0]
+                # Same output format style as inference_sthv2.py.
+                # Keep delta values as strings because Stage-2 training expects text tokens.
+                sample_id = f"{video_id}_{os.path.splitext(frame_name)[0]}"
+                elem_dict = {
+                    "id": sample_id,
+                    "video_id": video_id,
+                    "image": abs_frame_path,
+                    "delta": [str(i) for i in latent_ids],
+                    "instruction": instruction,
+                    "vision": [],
+                    "fields": "[instruction],[vision],delta",
+                }
 
-            z_rgb_indices.append(latent_ids)
+                fout.write(json.dumps(elem_dict, ensure_ascii=False) + "\n")
+                fout.flush()
 
-        np.savez_compressed(
-            npz_path,
-            video_id=video_id,
-            instruction=instruction,
-            split=split,
-            frame_files=np.array(frame_files),
-            z_rgb_indices=np.array(z_rgb_indices, dtype=np.int16),
-        )
+                z_rgb_indices.append(latent_ids)
+                video_written += 1
+                total_written += 1
 
-        if args.save_debug_json and debug_count < args.debug_max_videos:
-            json_path = os.path.join(debug_root, f"{video_id}.json")
-            save_debug_json(
-                json_path,
-                video_id=video_id,
-                instruction=instruction,
-                split=split,
-                frame_files=frame_files,
-                z_rgb_indices=z_rgb_indices,
+            if args.save_debug_json and debug_count < args.debug_max_videos:
+                json_path = os.path.join(debug_root, f"{video_id}.json")
+                save_debug_json(
+                    json_path,
+                    video_id=video_id,
+                    instruction=instruction,
+                    split=split,
+                    frame_files=frame_files,
+                    z_rgb_indices=z_rgb_indices,
+                )
+                debug_count += 1
+
+            print(
+                f"[{idx+1}/{len(video_ids)}] Wrote video_id={video_id} to JSONL | "
+                f"split={split} | frames={video_written} | "
+                f"time={time.time() - t_start:.2f}s"
             )
-            debug_count += 1
 
-        print(
-            f"[{idx+1}/{len(video_ids)}] Saved {video_id}.npz | "
-            f"split={split} | frames={len(frame_files)} | "
-            f"time={time.time() - t_start:.2f}s"
-        )
+    print(f"Done. Wrote {total_written} lines to: {unshuffled_jsonl}")
 
 
 if __name__ == "__main__":

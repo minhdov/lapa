@@ -4,7 +4,7 @@ cd $PROJECT_DIR
 export PYTHONPATH="$PYTHONPATH:$PROJECT_DIR"
 export LIBTPU_INIT_ARGS="--xla_tpu_megacore_fusion_allow_ags=false --xla_enable_async_collective_permute=true --xla_tpu_enable_ag_backward_pipelining=true --xla_tpu_enable_data_parallel_all_reduce_opt=true --xla_tpu_data_parallel_opt_different_sized_ops=true --xla_tpu_enable_async_collective_fusion=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_overlap_compute_collective_tc=true --xla_enable_async_all_gather=true"
 
-export absolute_path="/home/do/Workspace/philo/External/LAPA" # absolute path to the project directory
+export absolute_path= # absolute path to the project directory
 export llama_tokenizer_path="$absolute_path/lapa_checkpoints/tokenizer.model"
 export output_dir="$absolute_path/outputs"
 
@@ -16,7 +16,7 @@ export experiment_id='latent_pretrain_openx'
 
 python3 -u -m latent_pretraining.train \
     --modality='vision,text,delta' \
-    --mesh_dim='!-1,1,1,1' \
+    --mesh_dim='!-1,8,1,1' \
     --dtype='bf16' \
     --total_steps=70000 \
     --log_freq=1 \
@@ -44,11 +44,11 @@ python3 -u -m latent_pretraining.train \
     --train_dataset.delta_vision_text_processor.img_aug=False \
     --train_dataset.json_delta_dataset.mode="pad" \
     --train_dataset.json_delta_dataset.path="$dataset_path" \
-    --train_dataset.json_delta_dataset.seq_length=128 \
-    --train_dataset.json_delta_dataset.batch_size=1 \
+    --train_dataset.json_delta_dataset.seq_length=384 \
+    --train_dataset.json_delta_dataset.batch_size=256 \
     --train_dataset.json_delta_dataset.tokenizer_processes=1 \
-    --train_dataset.json_delta_dataset.tokenizer_parallel_chunk_size=8 \
-    --train_dataset.json_delta_dataset.tokenizer_parallel_batch_size=8 \
+    --train_dataset.json_delta_dataset.tokenizer_parallel_chunk_size=256 \
+    --train_dataset.json_delta_dataset.tokenizer_parallel_batch_size=256 \
     --train_dataset.json_delta_dataset.use_data_sharded_loader=True \
     --checkpointer.save_optimizer_state=False \
     --autoresume=False \

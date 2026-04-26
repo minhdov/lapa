@@ -50,9 +50,6 @@ class LatentActionQuantization(nn.Module):
 
         super().__init__()
 
-        self.dim = dim
-        self.codebook_size = codebook_size
-
         self.code_seq_len = code_seq_len
         self.image_size = pair(image_size)
         self.patch_size = pair(patch_size)
@@ -106,21 +103,25 @@ class LatentActionQuantization(nn.Module):
             patch_size=patch_size,
             image_size=image_size
         )
+        
+                # ===== Stage 2.5 modules =====
+        self.stage25_z_embed = nn.Embedding(codebook_size, dim)
+
+        self.stage25_fusion = nn.Sequential(
+            nn.LayerNorm(dim * 2),
+            nn.Linear(dim * 2, dim),
+            nn.GELU(),
+            nn.Linear(dim, dim),
+            nn.LayerNorm(dim),
+        )
+
+        self.stage25_head = nn.Linear(dim, codebook_size)
             
             
         self.dec_spatial_transformer = Transformer(depth = spatial_depth, **transformer_with_action_kwargs)
         self.to_pixels_first_frame = nn.Sequential(
             nn.Linear(dim, channels * patch_width * patch_height),
             Rearrange('b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)', p1 = patch_height, p2 = patch_width)
-        )
-
-        self.rgb_token_embed = nn.Embedding(self.codebook_size, self.dim)
-
-        self.geometry_adapter = nn.Sequential(
-            nn.LayerNorm(self.dim),
-            nn.Linear(self.dim, self.dim * 2),
-            nn.GELU(),
-            nn.Linear(self.dim * 2, self.dim)
         )
 
 
@@ -174,9 +175,121 @@ class LatentActionQuantization(nn.Module):
         last_tokens = tokens[:, 1:]
         
         return first_tokens, last_tokens
+    
+    
+    def encode_single_frame(self, frame):
+        """
+        Encode a single frame/depth image into spatial tokens.
 
+        Args:
+            frame: [B, C, H, W]
+
+        Returns:
+            depth_feature: [B, D]
+            depth_tokens:  [B, H_patch, W_patch, D]
+        """
+        assert frame.ndim == 4, f"Expected [B, C, H, W], got {frame.shape}"
+
+        b, c, h_img, w_img = frame.shape
+        assert (h_img, w_img) == self.image_size, f"Expected image size {self.image_size}, got {(h_img, w_img)}"
+
+        h, w = self.patch_height_width
+
+        # [B, C, H, W] -> [B, C, 1, H, W]
+        frame = rearrange(frame, 'b c h w -> b c 1 h w')
+
+        # [B, 1, H_patch, W_patch, D]
+        frame_tokens = self.to_patch_emb_first_frame(frame)
+
+        video_shape = tuple(frame_tokens.shape[:-1])
+
+        # [B, 1, H, W, D] -> [B, H*W, D]
+        tokens = rearrange(frame_tokens, 'b t h w d -> (b t) (h w) d')
+
+        attn_bias = self.spatial_rel_pos_bias(h, w, device=tokens.device)
+
+        tokens = self.enc_spatial_transformer(
+            tokens,
+            attn_bias=attn_bias,
+            video_shape=video_shape
+        )
+
+        # [B, H, W, D]
+        depth_tokens = rearrange(tokens, '(b t) (h w) d -> b t h w d', b=b, h=h, w=w)[:, 0]
+
+        # global feature [B, D]
+        depth_feature = depth_tokens.mean(dim=(1, 2))
+
+        return depth_feature, depth_tokens    
+    
+
+    def indices_to_action_tokens(self, indices):
+        """
+        Convert latent action indices into embeddings.
+
+        Args:
+            indices: [B, code_seq_len], e.g. [B, 4]
+
+        Returns:
+            z_tokens:  [B, code_seq_len, D]
+            z_feature: [B, D]
+        """
+        assert indices.ndim == 2, f"Expected [B, code_seq_len], got {indices.shape}"
+        assert indices.shape[1] == self.code_seq_len, \
+            f"Expected code_seq_len={self.code_seq_len}, got {indices.shape[1]}"
+
+        indices = indices.long()
+        z_tokens = self.stage25_z_embed(indices)   # [B, 4, D]
+        z_feature = z_tokens.mean(dim=1)           # [B, D]
+
+        return z_tokens, z_feature
         
 
+    def forward_stage25(
+        self,
+        depth1,
+        z_rgb_indices,
+        z_depth_indices=None,
+    ):
+        """
+        Stage 2.5: geometry-aware latent refinement.
+
+        Args:
+            depth1:          [B, C, H, W]
+            z_rgb_indices:   [B, code_seq_len], e.g. [B, 4]
+            z_depth_indices: [B, code_seq_len], optional target
+
+        Returns:
+            If z_depth_indices is provided:
+                loss, z_refined_logits, z_refined_feature
+            Else:
+                z_refined_logits, z_refined_feature
+        """
+        # depth1 -> depth feature
+        depth_feature, depth_tokens = self.encode_single_frame(depth1)  # [B, D]
+
+        # z_rgb_indices -> latent action prior feature
+        z_rgb_tokens, z_rgb_feature = self.indices_to_action_tokens(z_rgb_indices)  # [B, 4, D], [B, D]
+
+        # fuse depth geometry + RGB/text latent prior
+        fused = torch.cat([depth_feature, z_rgb_feature], dim=-1)  # [B, 2D]
+        z_refined_feature = self.stage25_fusion(fused)             # [B, D]
+
+        # expand to 4 latent slots
+        z_refined_tokens = z_refined_feature[:, None, :].repeat(1, self.code_seq_len, 1)  # [B, 4, D]
+
+        # predict z_depth_indices
+        z_refined_logits = self.stage25_head(z_refined_tokens)  # [B, 4, codebook_size]
+
+        if z_depth_indices is not None:
+            loss = F.cross_entropy(
+                z_refined_logits.reshape(-1, z_refined_logits.shape[-1]),
+                z_depth_indices.reshape(-1).long()
+            )
+            return loss, z_refined_logits, z_refined_feature
+
+        return z_refined_logits, z_refined_feature
+    
     def decode(
         self,
         tokens,
@@ -210,10 +323,7 @@ class LatentActionQuantization(nn.Module):
 
     def forward(
         self,
-        video=None,
-        decoder_video=None,
-        depth=None,
-        z_rgb=None,
+        video,
         step = 0,
         mask = None,
         return_recons_only = False,
@@ -225,8 +335,6 @@ class LatentActionQuantization(nn.Module):
 
         if is_image:
             video = rearrange(video, 'b c h w -> b c 1 h w')
-            if decoder_video is not None:
-                decoder_video = rearrange(decoder_video, 'b c h w -> b c 1 h w')
             assert not exists(mask)
 
         b, c, f, *image_dims, device = *video.shape, video.device
@@ -235,15 +343,11 @@ class LatentActionQuantization(nn.Module):
         assert not exists(mask) or mask.shape[-1] == f
 
         first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
+
+
         first_frame_tokens = self.to_patch_emb_first_frame(first_frame)
         rest_frames_tokens = self.to_patch_emb_first_frame(rest_frames)
         tokens = torch.cat((first_frame_tokens, rest_frames_tokens), dim = 1)
-
-        if decoder_video is not None:
-            first_decoder_frame, rest_decoder_frames = decoder_video[:, :, :1], decoder_video[:, :, 1:]
-            first_decoder_tokens = self.to_patch_emb_first_frame(first_decoder_frame)
-            rest_decoder_tokens = self.to_patch_emb_first_frame(rest_decoder_frames)
-            decoder_tokens = torch.cat((first_decoder_tokens, rest_decoder_tokens), dim = 1)
 
         shape = tokens.shape
         *_, h, w, _ = shape
@@ -263,17 +367,9 @@ class LatentActionQuantization(nn.Module):
         
         tokens, perplexity, codebook_usage, indices = self.vq(first_tokens, last_tokens, codebook_training_only = False)
         
-        z_depth = tokens
-        
-        B = tokens.shape[0]   # 64
-
-        if z_rgb is not None: 
-            z_rgb = z_rgb.to(z_depth.device).long()
-            z_a = self.rgb_token_embed(z_rgb)                  # [B, K, D]
-            # z_g = z_a + self.geometry_adapter(z_a)             # [B, K, D]
-
         num_unique_indices = indices.unique().size(0)
-    
+        
+
         
         if ((step % 10 == 0 and step < 100)  or (step % 100 == 0 and step < 1000) or (step % 500 == 0 and step < 5000)) and step != 0:
             print(f"update codebook {step}")
@@ -292,36 +388,13 @@ class LatentActionQuantization(nn.Module):
             ## error
             print("code_seq_len should be square number or defined as 2")
             return
-                
-        if z_rgb is not None:
-                # dùng z_g thay cho hard lookup depth codebook
-            # z_fused = 0.5 * z_depth + 0.5 * z_g
-            z_fused = z_a  # case 3
-
-            z_fused = rearrange(z_fused, 'b (t h w) d -> b t h w d', h=action_h, w=action_w)
-
-            # align_loss = F.mse_loss(z_g, z_depth.detach())
-        else:
-            tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h = action_h, w = action_w)
-            align_loss = 0
-
-
+        
+        tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h = action_h, w = action_w)
         concat_tokens = first_frame_tokens.detach() # + tokens
-
-        if decoder_video is not None:
-            concat_tokens = first_decoder_tokens.detach() # + decoder_tokens
-
-        if z_rgb is not None:
-            recon_video = self.decode(concat_tokens, z_fused)
-        else:
-            recon_video = self.decode(concat_tokens, tokens)
-            
+        recon_video = self.decode(concat_tokens, tokens)
 
         returned_recon = rearrange(recon_video, 'b c 1 h w -> b c h w')
         video = rest_frames 
-
-        if decoder_video is not None:
-            video = rest_decoder_frames
 
         if return_recons_only:
             return returned_recon
@@ -334,24 +407,17 @@ class LatentActionQuantization(nn.Module):
         else:
             recon_loss = F.mse_loss(video, recon_video)
 
-        align_loss = 0 # case 3
-        total_loss = recon_loss + 0.1 * align_loss
-
-        return total_loss, num_unique_indices
+        return recon_loss, num_unique_indices
         
 
     def inference(
         self,
-        video = None,
-        decoder_video = None,
-        depth = None,
-        z_rgb = None,
+        video,
         step = 0,
         mask = None,
         return_only_codebook_ids=False,
         user_action_token_num=None
     ):
-        
         
         assert video.ndim in {4, 5}
 
@@ -359,8 +425,6 @@ class LatentActionQuantization(nn.Module):
 
         if is_image:
             video = rearrange(video, 'b c h w -> b c 1 h w')
-            if decoder_video is not None:
-                decoder_video = rearrange(decoder_video, 'b c h w -> b c 1 h w')
             assert not exists(mask)
 
         b, c, f, *image_dims, device = *video.shape, video.device
@@ -373,12 +437,6 @@ class LatentActionQuantization(nn.Module):
         first_frame_tokens = self.to_patch_emb_first_frame(first_frame)
         rest_frames_tokens = self.to_patch_emb_first_frame(rest_frames)
         tokens = torch.cat((first_frame_tokens, rest_frames_tokens), dim = 1)
-       
-        if decoder_video is not None:
-            first_decoder_frame, rest_decoder_frames = decoder_video[:, :, :1], decoder_video[:, :, 1:]
-            first_decoder_tokens = self.to_patch_emb_first_frame(first_decoder_frame)
-            rest_decoder_tokens = self.to_patch_emb_first_frame(rest_decoder_frames)
-            decoder_tokens = torch.cat((first_decoder_tokens, rest_decoder_tokens), dim = 1)
 
 
         shape = tokens.shape
@@ -395,16 +453,8 @@ class LatentActionQuantization(nn.Module):
         else:
             tokens, indices = self.vq.inference(first_tokens, last_tokens)
 
-        z_depth = tokens
-
-        if z_rgb is not None:
-            z_rgb = z_rgb.to(z_depth.device).long()
-
-            z_a = self.rgb_token_embed(z_rgb)          # [B, K, D]
-            # z_g = z_a + self.geometry_adapter(z_a)     # [B, K, D]
-            # z_fused = 0.5 * z_depth + 0.5 * z_g
-            z_fused = z_a
-
+        
+    
         if return_only_codebook_ids:
             return indices
 
@@ -419,25 +469,11 @@ class LatentActionQuantization(nn.Module):
             return
         
 
-        if z_rgb is not None:
-            z_fused = rearrange(z_fused, 'b (t h w) d -> b t h w d', h=action_h, w=action_w)
-        else:
-            tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h = action_h, w = action_w)
-
+        tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h = action_h, w = action_w)
         concat_tokens = first_frame_tokens #.detach() #+ tokens
-        if decoder_video is not None:
-            concat_tokens = first_decoder_tokens #.detach() #+ decoder_tokens
-        # recon_video = self.decode(concat_tokens, actions=tokens)
-        if z_rgb is not None:
-            recon_video = self.decode(concat_tokens, actions=z_fused)
-        else:
-            recon_video = self.decode(concat_tokens, actions=tokens)
-
-
+        recon_video = self.decode(concat_tokens, actions=tokens)
         returned_recon = rearrange(recon_video, 'b c 1 h w -> b c h w')
         video = rest_frames 
-        if decoder_video is not None:
-            video = rest_decoder_frames
-
+        
         return returned_recon
 

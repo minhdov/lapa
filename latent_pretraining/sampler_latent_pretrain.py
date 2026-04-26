@@ -86,41 +86,6 @@ class DeltaSampler:
         return {
             'input_ids': np.expand_dims(tokens, axis=0),
         }
-    
-    def get_delta_token_embedding_table(self):
-        """
-        Return delta token embedding table with shape [delta_vocab_size, hidden_size].
-        Example: [8, 4096]
-        """
-        emb = self.params['params']['transformer']['dte']['embedding']
-        emb = jax.device_get(emb)
-        return emb
-
-    def delta_ids_to_embedding(self, delta_ids, reshape_to_grid=True):
-        """
-        Convert sampled delta token ids to continuous embedding.
-
-        Args:
-            delta_ids: shape [B, 4] or [4]
-            reshape_to_grid: if True, reshape to [B, 1, 2, 2, D]
-
-        Returns:
-            z: continuous embedding
-        """
-        emb_table = self.get_delta_token_embedding_table()   # [V, D]
-
-        delta_ids = np.asarray(delta_ids)
-        if delta_ids.ndim == 1:
-            delta_ids = delta_ids[None, :]   # [1, 4]
-
-        z = emb_table[delta_ids]   # [B, 4, D]
-
-        if reshape_to_grid:
-            B, T, D = z.shape
-            assert T == 4, f"Expected 4 delta tokens, got {T}"
-            z = z.reshape(B, 1, 2, 2, D)
-
-        return z
              
 
     def _load_model(self):

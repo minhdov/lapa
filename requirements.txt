@@ -23,8 +23,3 @@ scipy==1.12.0
 albumentations
 uvicorn
 fastapi
-numpy==1.26.4
-accelerate==1.13.0
-beartype
-ema-pytorch
-vector-quantize-pytorch

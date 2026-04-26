@@ -109,54 +109,6 @@ class NSVQ(torch.nn.Module):
         quantized_input = self.project_out(quantized_input)
         return quantized_input
     
-    def indices_to_tokens(self, indices, reshape_to_grid=True):
-        """
-        Convert latent indices to decoded latent tokens (same format as output of self.vq).
-
-        Args:
-            indices: [B, T] or [T]
-
-        Returns:
-            z_tokens:
-                if reshape_to_grid=True:
-                    [B, 1, H, W, dim]
-                else:
-                    [B, T, dim]
-        """
-        if not torch.is_tensor(indices):
-            indices = torch.tensor(indices, dtype=torch.long, device=self.codebooks.device)
-        else:
-            indices = indices.to(device=self.codebooks.device, dtype=torch.long)
-
-        if indices.ndim == 1:
-            indices = indices.unsqueeze(0)   # [1, T]
-
-        B, T = indices.shape
-
-        # 🔹 Step 1: lookup codebook
-        z_codebook = self.codebooks[indices]   # [B, T, embedding_dim]
-
-        # 🔹 Step 2: decode → same space as tokens from self.vq(...)
-        z_tokens = self.decode(z_codebook, B)  # [B, T, dim]
-
-        if reshape_to_grid:
-            B, T, D = z_tokens.shape
-
-            if T == 4:
-                z_tokens = z_tokens.reshape(B, 1, 2, 2, D)
-            elif T == 2:
-                z_tokens = z_tokens.reshape(B, 1, 2, 1, D)
-            elif int(T ** 0.5) ** 2 == T:
-                hw = int(T ** 0.5)
-                z_tokens = z_tokens.reshape(B, 1, hw, hw, D)
-            else:
-                raise ValueError(f"Cannot reshape T={T} into grid")
-
-        return z_tokens
-    
-    def fake_indices_to_tokens(self, fake_indices, reshape_to_grid=True):
-        return self.indices_to_tokens(fake_indices, reshape_to_grid=reshape_to_grid)
-
     def forward(self, input_data_first, input_data_last, codebook_training_only=False):
 
         """
@@ -329,4 +281,5 @@ class NSVQ(torch.nn.Module):
     def codebook_reinit(self):
         self.codebooks = torch.nn.Parameter(torch.randn(self.num_embeddings, self.embedding_dim, device=self.device), requires_grad=True)
         self.codebooks_used = torch.zeros(self.num_embeddings, dtype=torch.int32, device=self.device)
+        
         

@@ -6,7 +6,7 @@ print("cuda available:", torch.cuda.is_available())
 print("gpu:", torch.cuda.get_device_name(0))
 EOF
 
-python3 - <<'PY'
+python - <<'PY'
 import jax
 import jax.numpy as jnp
 print("jax:", jax.__version__)

@@ -395,8 +395,6 @@ def main(argv):
                     action_loss=action_loss,
                     action_acc=action_acc,
                 )
-            elif FLAGS.modality == 'vision,depth,action': # our method
-                print("Pass")  
             else:
                 raise ValueError(f"Unsupported modality: {FLAGS.modality}")
             return loss, metrics 
