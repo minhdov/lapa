@@ -3,9 +3,9 @@ import json
 import re
 
 # ===== CONFIG =====
-root_dir = Path("/home/linhkastner/philo/datasets/ssv2/depth_val")
-output_jsonl = Path("/home/linhkastner/philo/datasets/ssv2/depth_val.jsonl")
-label_path = Path("/home/linhkastner/philo/datasets/ssv2/labels/validation.json")
+root_dir = Path("/storage/minh/philo/datasets/ssv2/nips/depth_train")
+output_jsonl = Path("/storage/minh/philo/datasets/ssv2/nips/depth_train.jsonl")
+label_path = Path("/storage/minh/philo/datasets/ssv2/nips/labels/train.json")
 
 valid_exts = {".png", ".jpg", ".jpeg"}
 

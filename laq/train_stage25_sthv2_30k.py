@@ -40,13 +40,13 @@ laq = LatentActionQuantizationStage25(
 trainer = LAQStage25Trainer(
     laq,
     dataset=dataset,
-    batch_size=128,
+    batch_size=64,
     grad_accum_every=1,
-    num_train_steps=70000,
+    num_train_steps=30000,
     results_folder="results_stage25_final",
     lr=1e-4,
     save_model_every=5000,
-    log_every=100,
+    log_every=50,
 
 )
 

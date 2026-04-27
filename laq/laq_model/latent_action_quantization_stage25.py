@@ -172,10 +172,15 @@ class LatentActionQuantizationStage25(nn.Module):
         # [B, C, H, W] -> [B, H_patch, W_patch, D]
         depth_tokens = self.to_patch_emb_depth(depth1)
 
-        video_shape = tuple(depth_tokens.shape[:-1])
+        # Add fake temporal dimension T=1.
+        # [B, H, W, D] -> [B, 1, H, W, D]
+        depth_tokens = rearrange(depth_tokens, "b h w d -> b 1 h w d")
 
-        # [B, H, W, D] -> [B, H*W, D]
-        tokens = rearrange(depth_tokens, "b h w d -> b (h w) d")
+        # Transformer expects video_shape = (B, T, H, W)
+        video_shape = tuple(depth_tokens.shape[:-1])  # (B, 1, H, W)
+
+        # [B, 1, H, W, D] -> [(B*T), H*W, D]
+        tokens = rearrange(depth_tokens, "b t h w d -> (b t) (h w) d")
 
         attn_bias = self.spatial_rel_pos_bias(
             h,
@@ -189,8 +194,14 @@ class LatentActionQuantizationStage25(nn.Module):
             video_shape=video_shape,
         )
 
-        # [B, H*W, D] -> [B, H, W, D]
-        depth_tokens = rearrange(tokens, "b (h w) d -> b h w d", h=h, w=w)
+        # [(B*T), H*W, D] -> [B, T, H, W, D] -> [B, H, W, D]
+        depth_tokens = rearrange(
+            tokens,
+            "(b t) (h w) d -> b t h w d",
+            b=b,
+            h=h,
+            w=w,
+        )[:, 0]
 
         # Global depth geometry feature.
         depth_feature = depth_tokens.mean(dim=(1, 2))  # [B, D]

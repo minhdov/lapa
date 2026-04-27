@@ -39,7 +39,8 @@ from torch.utils.data import DataLoader
 from accelerate import Accelerator, DistributedDataParallelKwargs
 
 from laq_model.optimizer import get_optimizer
-
+from torchvision.utils import save_image, make_grid
+import time
 
 def noop(*args, **kwargs):
     pass
@@ -127,6 +128,9 @@ class LAQStage25Trainer(nn.Module):
         num_workers: int = 4,
         pin_memory: bool = True,
         prefetch_factor: int = 2,
+        log_every: int = 50,
+        debug_save_input: bool = True,
+        debug_num_samples: int = 8,
     ):
         super().__init__()
 
@@ -147,7 +151,8 @@ class LAQStage25Trainer(nn.Module):
         self.grad_accum_every = int(grad_accum_every)
         self.max_grad_norm = max_grad_norm
         self.save_model_every = int(save_model_every)
-
+        self.log_every = int(log_every)
+        
         self.results_folder = Path(results_folder)
         self.results_folder.mkdir(parents=True, exist_ok=True)
         self.results_folder_str = str(self.results_folder)
@@ -157,6 +162,10 @@ class LAQStage25Trainer(nn.Module):
         self.wandb_run_name = wandb_run_name or self.results_folder.name
 
         self.register_buffer("steps", torch.tensor([0], dtype=torch.long))
+        
+        self.debug_save_input = debug_save_input
+        self.debug_num_samples = debug_num_samples
+        self.debug_saved_input = False
 
         self.optim = get_optimizer(
             self.model.parameters(),
@@ -185,7 +194,70 @@ class LAQStage25Trainer(nn.Module):
         self.dl_iter = cycle(self.dl)
         self.lr = lr
         self.wd = wd
+        self.start_time = time.time()
 
+    def save_debug_input_batch(self, batch, depth1, z_rgb_indices, z_depth_indices):
+        if not self.is_main:
+            return
+
+        if self.debug_saved_input:
+            return
+
+        if not self.debug_save_input:
+            return
+
+        debug_dir = self.results_folder / "debug_inputs"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+
+        n = min(self.debug_num_samples, depth1.shape[0])
+
+        debug_data = {
+            "depth1": depth1[:n].detach().cpu(),
+            "z_rgb_indices": z_rgb_indices[:n].detach().cpu(),
+            "z_depth_indices": z_depth_indices[:n].detach().cpu(),
+        }
+
+        if "id" in batch:
+            debug_data["id"] = batch["id"][:n]
+
+        if "depth1_path" in batch:
+            debug_data["depth1_path"] = batch["depth1_path"][:n]
+
+        torch.save(debug_data, debug_dir / "debug_batch.pt")
+
+        # Save depth images for quick visual check
+        depth_vis = depth1[:n].detach().cpu().float()
+
+        # If [B, 3, H, W], use first channel because depth was repeated 3ch
+        if depth_vis.shape[1] == 3:
+            depth_vis = depth_vis[:, :1]
+
+        grid = make_grid(depth_vis, nrow=min(n, 4), normalize=True, value_range=(0, 1))
+        save_image(grid, debug_dir / "depth1_grid.png")
+
+        # Save readable json
+        meta = []
+        for i in range(n):
+            item = {
+                "z_rgb_indices": z_rgb_indices[i].detach().cpu().tolist(),
+                "z_depth_indices": z_depth_indices[i].detach().cpu().tolist(),
+            }
+
+            if "id" in batch:
+                item["id"] = str(batch["id"][i])
+
+            if "depth1_path" in batch:
+                item["depth1_path"] = str(batch["depth1_path"][i])
+
+            meta.append(item)
+
+        with open(debug_dir / "debug_batch.json", "w", encoding="utf-8") as f:
+            import json
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+
+        self.print(f"Saved debug input batch to {debug_dir}")
+        self.debug_saved_input = True
+    
     @property
     def device(self):
         return self.accelerator.device
@@ -264,13 +336,13 @@ class LAQStage25Trainer(nn.Module):
         for _ in range(self.grad_accum_every):
             batch = next(self.dl_iter)
             depth1, z_rgb_indices, z_depth_indices = self._move_batch_to_device(batch)
-
-            loss, logits, z_refined_feature = self.model.forward_stage25(
+            self.save_debug_input_batch(batch, depth1, z_rgb_indices, z_depth_indices)
+            
+            loss, logits, z_refined_feature = self.model(
                 depth1=depth1,
                 z_rgb_indices=z_rgb_indices,
                 z_depth_indices=z_depth_indices,
             )
-
             loss_for_backward = loss / self.grad_accum_every
             self.accelerator.backward(loss_for_backward)
 
@@ -297,7 +369,7 @@ class LAQStage25Trainer(nn.Module):
             "step": steps,
         }
 
-        if self.is_main and self.use_wandb:
+        if self.is_main and self.use_wandb and steps % self.log_every == 0:
             wandb.log(logs)
 
         if self.is_main and self.save_model_every > 0 and steps % self.save_model_every == 0:
@@ -327,12 +399,32 @@ class LAQStage25Trainer(nn.Module):
             logs = self.train_step()
             log_fn(logs)
 
-            if self.is_main:
+            # if self.is_main and int(self.steps.item()) % self.log_every == 0:
+            #     self.print(
+            #         f"step {int(self.steps.item())} | "
+            #         f"loss {logs['stage25/loss']:.6f} | "
+            #         f"token_acc {logs['stage25/token_acc']:.4f}"
+            #     )
+            if self.is_main and int(self.steps.item()) % self.log_every == 0:
+                current_step = int(self.steps.item())
+                elapsed = time.time() - self.start_time
+
+                sec_per_step = elapsed / max(current_step, 1)
+                remaining_steps = self.num_train_steps - current_step
+                eta_sec = remaining_steps * sec_per_step
+
+                elapsed_hours = elapsed / 3600
+                eta_hours = eta_sec / 3600
+
                 self.print(
-                    f"step {int(self.steps.item())} | "
+                    f"step {current_step}/{self.num_train_steps} | "
                     f"loss {logs['stage25/loss']:.6f} | "
-                    f"token_acc {logs['stage25/token_acc']:.4f}"
+                    f"token_acc {logs['stage25/token_acc']:.4f} | "
+                    f"{sec_per_step:.3f}s/step | "
+                    f"elapsed {elapsed_hours:.2f}h | "
+                    f"ETA {eta_hours:.2f}h"
                 )
+    
 
         self.print("Stage 2.5 training complete")
 

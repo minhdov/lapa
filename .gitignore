@@ -1,3 +1,9 @@
 lapa_checkpoints/
 laq/results/
 logs/*
+laq/results*
+laq/outputs/
+laq/wandb
+laq/logs*
+laq/laq_model/__pycache__/*
+laq/debug_depth1.png
