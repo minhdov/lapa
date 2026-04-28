@@ -38,13 +38,13 @@ def main():
     parser.add_argument(
         "--root",
         type=str,
-        default="/storage/minh/philo/datasets/ssv2/nips/frames_train",
+        default="/datasets/something-something-v2/nips/30k/frames_train",
         help="Folder containing video folders, e.g. frames_train.",
     )
     parser.add_argument(
         "--out_dir",
         type=str,
-        default="/storage/minh/philo/datasets/ssv2/nips/shards",
+        default="/datasets/something-something-v2/nips/30k/shards",
         help="Output folder for shard txt files.",
     )
     parser.add_argument(

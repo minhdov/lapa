@@ -19,9 +19,21 @@ docker run --gpus all -it \
   -w /workspace/lapa \
   lapa-depth bash
 
+docker run --gpus all -it \
+  --name lapa_depth_dev2 \
+  --ipc=host \
+  -v $PWD:/workspace/lapa \
+  -v /media/do/data1/philo/datasets:/datasets \
+  -v /media/do/data1/philo/checkpoints:/checkpoints \
+  -v /media/do/data1/philo/outputs:/outputs \
+  -w /workspace/lapa \
+  lapa-depth:latest bash
+
+
   
 3. Launch new docker
 docker exec -it lapa_depth_dev bash
+docker exec -it lapa_depth_dev2 bash
 
 Pack docker image: 
 docker save -o lapa-depth.tar lapa-depth:latest
