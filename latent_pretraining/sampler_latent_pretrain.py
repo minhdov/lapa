@@ -149,9 +149,24 @@ class DeltaSampler:
             batch = with_sharding_constraint(batch, PS(('dp', 'fsdp'), 'sp'))
             rng_generator = JaxRNG(rng)
 
+            self.model.config.sample_mode = 'delta'
 
-            self.model.config.sample_mode='delta'
-            text_output = self.model.generate(
+            # gen_output = self.model.generate(
+            #     batch['input_ids'],
+            #     vision_masks=batch['vision_masks'],
+            #     attention_mask=batch['attention_mask'],
+            #     delta_masks=batch['delta_masks'],
+            #     params=params['params'],
+            #     prng_key=rng_generator(),
+            #     generation_config=GenerationConfig(
+            #         max_new_tokens=n_tokens,
+            #         min_new_tokens=n_tokens,
+            #         pad_token_id=self.tokenizer.pad_token_id,
+            #         eos_token_id=self.tokenizer.eos_token_id,
+            #     )
+            # )
+            
+            gen_output = self.model.generate_vision(
                 batch['input_ids'],
                 vision_masks=batch['vision_masks'],
                 attention_mask=batch['attention_mask'],
@@ -164,16 +179,27 @@ class DeltaSampler:
                     pad_token_id=self.tokenizer.pad_token_id,
                     eos_token_id=self.tokenizer.eos_token_id,
                 )
-            ).sequences
-            delta_output= text_output[:,batch['input_ids'].shape[1]:]
-            return delta_output, rng_generator()
+            )
+
+            text_output = gen_output["sequences"]
+            delta_features = gen_output["delta_features"]
+
+            delta_output = text_output[:, batch['input_ids'].shape[1]:]
+
+            return delta_output, delta_features, rng_generator()
+        
+        # return pjit(
+        #     fn,
+        #     in_shardings=(self.model_ps, PS(), PS()),
+        #     out_shardings=(PS(), PS()),
+        #     static_argnums=(3,)
+        # )
         return pjit(
             fn,
             in_shardings=(self.model_ps, PS(), PS()),
-            out_shardings=(PS(), PS()),
+            out_shardings=(PS(), PS(), PS()),
             static_argnums=(3,)
         )
-
     
     def generate_video_pred(self, prompts, images, max_input_length):
         
@@ -206,18 +232,64 @@ class DeltaSampler:
             ], axis=1),
         )
 
+        # with self.mesh:
+        #     delta_output, sharded_rng = self._forward_generate(
+        #         self.params, sharded_rng, batch, 
+        #         self.FLAGS.tokens_per_delta
+        #     )
+        #     delta_output = jax.device_get(delta_output)
+            
+        # return delta_output,
+        
         with self.mesh:
-            delta_output, sharded_rng = self._forward_generate(
-                self.params, sharded_rng, batch, 
+            delta_output, delta_features, sharded_rng = self._forward_generate(
+                self.params,
+                sharded_rng,
+                batch,
                 self.FLAGS.tokens_per_delta
             )
-            delta_output = jax.device_get(delta_output)
-            
-        return delta_output,
 
-    def __call__(self, prompts):
+            delta_output = jax.device_get(delta_output)
+            delta_features = jax.device_get(delta_features)
+
+        # print("DEBUG delta_output shape:", delta_output.shape)
+        # print("DEBUG delta_output:", delta_output)
+        # print("DEBUG delta_features shape:", delta_features.shape)
+        # print("DEBUG delta_features dtype:", delta_features.dtype)
+        # print("DEBUG delta_features min/max:", delta_features.min(), delta_features.max())
+            
+        return delta_output, delta_features
+
+    # def __call__(self, prompts):
+    #     batch = self.construct_input(prompts)
+    #     text_prompt = f"<s> <s> You are a helpful assistant. USER: What action should the robot take to `{prompts[0]['question']}` ASSISTANT: <vision>"
+    #     latent_output = self.generate_video_pred(prompts=[text_prompt], images=batch['input_ids'], max_input_length=128)
+    #     return latent_output
+        
+    def __call__(self, prompts, return_feature_before_head=False, feature_pool="mean"):
         batch = self.construct_input(prompts)
         text_prompt = f"<s> <s> You are a helpful assistant. USER: What action should the robot take to `{prompts[0]['question']}` ASSISTANT: <vision>"
-        latent_output = self.generate_video_pred(prompts=[text_prompt], images=batch['input_ids'], max_input_length=128)
-        return latent_output
-        
+
+        delta_output, delta_features = self.generate_video_pred(
+            prompts=[text_prompt],
+            images=batch['input_ids'],
+            max_input_length=128
+        )
+
+        if not return_feature_before_head:
+            return delta_output,
+
+        if feature_pool == "mean":
+            z_rgb_feature = delta_features.mean(axis=1)  # [B, hidden_dim]
+        elif feature_pool == "none":
+            z_rgb_feature = delta_features              # [B, 4, hidden_dim]
+        else:
+            raise ValueError(f"Unknown feature_pool: {feature_pool}")
+
+        # print("DEBUG z_rgb_feature shape:", z_rgb_feature.shape)
+
+        return {
+            "latent_action": delta_output,
+            "z_rgb_feature_before_head": z_rgb_feature,
+            "z_rgb_token_features_before_head": delta_features,
+        }

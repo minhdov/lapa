@@ -7,3 +7,4 @@ laq/wandb
 laq/logs*
 laq/laq_model/__pycache__/*
 laq/debug_depth1.png
+latent_pretraining/__pycache__/*

@@ -8,8 +8,6 @@ import jax.numpy as jnp
 from jax import lax
 from jax.sharding import PartitionSpec as PS
 import flax.linen as nn
-from flax import struct
-
 from flax.core.frozen_dict import unfreeze, freeze
 from flax.traverse_util import flatten_dict, unflatten_dict
 
@@ -21,7 +19,6 @@ from transformers import GenerationConfig
 
 from tux import load_pickle, open_file
 from latent_pretraining.llama import LLaMAConfig, LLAMA_STANDARD_CONFIGS, FlaxLLaMABlockCollection, RMSNorm
-
 
 
 VIDEO_LLAMA_STANDARD_CONFIGS = LLAMA_STANDARD_CONFIGS
@@ -494,16 +491,7 @@ class FlaxDeltaLaMAForCausalLMModule(nn.Module):
             raise ValueError(f"Invalid sample_mode: {self.config.sample_mode}")
 
 
-@struct.dataclass
-class SampleStateWithFeatures:
-    cur_len: jnp.ndarray
-    sequences: jnp.ndarray
-    running_token: jnp.ndarray
-    is_sent_finished: jnp.ndarray
-    prng_key: jnp.ndarray
-    model_kwargs: dict
-    delta_features: jnp.ndarray
-    
+
 @add_start_docstrings("", "")
 class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
     module_class = FlaxDeltaLaMAForCausalLMModule
@@ -572,15 +560,6 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
         # per batch-item holding current token in loop.
         sequences = jnp.full((batch_size, max_length), pad_token_id, dtype=jnp.int32)
         sequences = lax.dynamic_update_slice(sequences, input_ids, (0, 0))
-        
-        num_new_tokens = max_length - initial_len
-        hidden_size = self.config.hidden_size
-
-        delta_features = jnp.zeros(
-            (batch_size, num_new_tokens, hidden_size),
-            dtype=self.dtype,
-        )
-
 
         # per batch-item state bit indicating if sentence has finished.
         is_sent_finished = jnp.zeros((batch_size,), dtype=jnp.bool_)
@@ -593,24 +572,14 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
         model_kwargs = self.prepare_inputs_for_generation(input_ids, max_length, **model_kwargs)
 
         # initialize state
-        # state = SampleState(
-        #     cur_len=cur_len,
-        #     sequences=sequences,
-        #     running_token=input_ids,
-        #     is_sent_finished=is_sent_finished,
-        #     prng_key=prng_key,
-        #     model_kwargs=model_kwargs,
-        # )
-        
-        state = SampleStateWithFeatures(
-                cur_len=cur_len,
-                sequences=sequences,
-                running_token=input_ids,
-                is_sent_finished=is_sent_finished,
-                prng_key=prng_key,
-                model_kwargs=model_kwargs,
-                delta_features=delta_features,
-            )
+        state = SampleState(
+            cur_len=cur_len,
+            sequences=sequences,
+            running_token=input_ids,
+            is_sent_finished=is_sent_finished,
+            prng_key=prng_key,
+            model_kwargs=model_kwargs,
+        )
 
         def sample_search_cond_fn(state):
             """state termination condition fn."""
@@ -622,29 +591,7 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
         def sample_search_body_fn(state):
             """state update fn."""
             prng_key, prng_key_next = jax.random.split(state.prng_key)
-            # model_outputs = model(state.running_token, params=params, **state.model_kwargs)
-
-            # logits = model_outputs.logits[:, -1]
-            
-            model_outputs = model(
-                state.running_token,
-                params=params,
-                output_hidden_states=True,
-                return_dict=True,
-                **state.model_kwargs,
-            )
-
-            # Feature before delta_head.
-            # Shape: [B, hidden_dim]
-            hidden_before_head = model_outputs.hidden_states[-1][:, -1, :]
-
-            feature_idx = state.cur_len - initial_len
-
-            delta_features = lax.dynamic_update_slice(
-                state.delta_features,
-                hidden_before_head[:, None, :],
-                (0, feature_idx, 0),
-            )
+            model_outputs = model(state.running_token, params=params, **state.model_kwargs)
 
             logits = model_outputs.logits[:, -1]
 
@@ -666,23 +613,13 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
             next_sequences = lax.dynamic_update_slice(state.sequences, next_token, (0, state.cur_len))
             next_model_kwargs = self.update_inputs_for_generation(model_outputs, state.model_kwargs)
 
-            # return SampleState(
-            #     cur_len=state.cur_len + 1,
-            #     sequences=next_sequences,
-            #     running_token=next_token,
-            #     is_sent_finished=next_is_sent_finished,
-            #     model_kwargs=next_model_kwargs,
-            #     prng_key=prng_key_next,
-            # )
-            
-            return SampleStateWithFeatures(
+            return SampleState(
                 cur_len=state.cur_len + 1,
                 sequences=next_sequences,
                 running_token=next_token,
                 is_sent_finished=next_is_sent_finished,
                 model_kwargs=next_model_kwargs,
                 prng_key=prng_key_next,
-                delta_features=delta_features,
             )
 
         # The very first prompt often has sequence length > 1, so run outside of `lax.while_loop` to comply with TPU
@@ -694,11 +631,7 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
         else:
             state = lax.while_loop(sample_search_cond_fn, sample_search_body_fn, state)
 
-        # return FlaxSampleOutput(sequences=state.sequences)
-        return {
-            "sequences": state.sequences,
-            "delta_features": state.delta_features,
-                    }
+        return FlaxSampleOutput(sequences=state.sequences)
 
     def generate_vision(
         self,
