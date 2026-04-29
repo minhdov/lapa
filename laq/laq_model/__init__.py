@@ -1,6 +1,11 @@
 from laq_model.latent_action_quantization import LatentActionQuantization
 from laq_model.laq_trainer import LAQTrainer
 
-from laq_model.latent_action_quantization_stage25 import LatentActionQuantizationStage25
-from laq_model.laq_stage25_trainer import LAQStage25Trainer
-from laq_model.data_stage25 import Stage25Dataset
+# from laq_model.latent_action_quantization_stage25 import LatentActionQuantizationStage25
+from laq_model.latent_action_quantization_stage25_feature import LatentActionQuantizationStage25
+
+# from laq_model.laq_stage25_trainer import LAQStage25Trainer
+from laq_model.laq_stage25_trainer_feature import LAQStage25Trainer
+
+# from laq_model.data_stage25 import Stage25Dataset
+from laq_model.data_stage25_feature import Stage25Dataset
