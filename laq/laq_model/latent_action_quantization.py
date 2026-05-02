@@ -245,51 +245,6 @@ class LatentActionQuantization(nn.Module):
         return z_tokens, z_feature
         
 
-    def forward_stage25(
-        self,
-        depth1,
-        z_rgb_indices,
-        z_depth_indices=None,
-    ):
-        """
-        Stage 2.5: geometry-aware latent refinement.
-
-        Args:
-            depth1:          [B, C, H, W]
-            z_rgb_indices:   [B, code_seq_len], e.g. [B, 4]
-            z_depth_indices: [B, code_seq_len], optional target
-
-        Returns:
-            If z_depth_indices is provided:
-                loss, z_refined_logits, z_refined_feature
-            Else:
-                z_refined_logits, z_refined_feature
-        """
-        # depth1 -> depth feature
-        depth_feature, depth_tokens = self.encode_single_frame(depth1)  # [B, D]
-
-        # z_rgb_indices -> latent action prior feature
-        z_rgb_tokens, z_rgb_feature = self.indices_to_action_tokens(z_rgb_indices)  # [B, 4, D], [B, D]
-
-        # fuse depth geometry + RGB/text latent prior
-        fused = torch.cat([depth_feature, z_rgb_feature], dim=-1)  # [B, 2D]
-        z_refined_feature = self.stage25_fusion(fused)             # [B, D]
-
-        # expand to 4 latent slots
-        z_refined_tokens = z_refined_feature[:, None, :].repeat(1, self.code_seq_len, 1)  # [B, 4, D]
-
-        # predict z_depth_indices
-        z_refined_logits = self.stage25_head(z_refined_tokens)  # [B, 4, codebook_size]
-
-        if z_depth_indices is not None:
-            loss = F.cross_entropy(
-                z_refined_logits.reshape(-1, z_refined_logits.shape[-1]),
-                z_depth_indices.reshape(-1).long()
-            )
-            return loss, z_refined_logits, z_refined_feature
-
-        return z_refined_logits, z_refined_feature
-    
     def decode(
         self,
         tokens,
@@ -410,12 +365,22 @@ class LatentActionQuantization(nn.Module):
         return recon_loss, num_unique_indices
         
 
+    # def inference(
+    #     self,
+    #     video,
+    #     step = 0,
+    #     mask = None,
+    #     return_only_codebook_ids=False,
+    #     user_action_token_num=None
+    # ):
+    
     def inference(
         self,
         video,
         step = 0,
         mask = None,
         return_only_codebook_ids=False,
+        return_features=False,
         user_action_token_num=None
     ):
         
@@ -453,7 +418,17 @@ class LatentActionQuantization(nn.Module):
         else:
             tokens, indices = self.vq.inference(first_tokens, last_tokens)
 
-        
+        if return_features:
+            # tokens: continuous latent action tokens from VQ inference
+            # likely shape: [B, code_seq_len, quant_dim] or [B, code_seq_len, dim]
+            z_depth_tokens = tokens
+            z_depth_feature = z_depth_tokens.mean(dim=1)
+
+            return {
+                "z_depth_indices": indices,
+                "z_depth_tokens": z_depth_tokens,
+                "z_depth_feature": z_depth_feature,
+            }
     
         if return_only_codebook_ids:
             return indices
