@@ -50,4 +50,7 @@ trainer = LAQStage25Trainer(
     log_every=100,
 )
 
+trainer.load("results_stage25_final_feature/init/stage25.10000.pt", strict=True)
+
+
 trainer.train()
