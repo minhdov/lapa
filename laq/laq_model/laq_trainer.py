@@ -2,6 +2,8 @@ from math import sqrt
 from random import choice
 from pathlib import Path
 from shutil import rmtree
+import time
+from datetime import datetime, timedelta
 import wandb
 
 from beartype import beartype
@@ -21,7 +23,7 @@ from ema_pytorch import EMA
 from laq_model.data import ImageVideoDataset
 
 
-from accelerate import Accelerator, DistributedDataParallelKwargs
+from accelerate import Accelerator, DistributedDataParallelKwargs, DistributedType
 
 from einops import rearrange
 
@@ -122,19 +124,39 @@ class LAQTrainer(nn.Module):
         self.valid_ds = self.ds
 
 
+        # self.dl = DataLoader(
+        #     self.ds,
+        #     batch_size = batch_size,
+        #     shuffle=True,
+        #     num_workers=4,  # or more depending on your CPU cores
+        #     pin_memory=True,  # Helps with faster data transfer to GPU
+        #     prefetch_factor=2,
+        #     )
+
+        # self.valid_dl = DataLoader(
+        #     self.valid_ds,
+        #     batch_size = batch_size,
+        #     num_workers = 4)
+        
         self.dl = DataLoader(
             self.ds,
-            batch_size = batch_size,
+            batch_size=batch_size,
             shuffle=True,
-            num_workers=4,  # or more depending on your CPU cores
-            pin_memory=True,  # Helps with faster data transfer to GPU
-            prefetch_factor=2,
-            )
+            num_workers=16,
+            pin_memory=True,
+            prefetch_factor=4,
+            persistent_workers=True,
+        )
 
         self.valid_dl = DataLoader(
             self.valid_ds,
-            batch_size = batch_size,
-            num_workers = 4)
+            batch_size=batch_size,
+            num_workers=8,
+            pin_memory=True,
+            prefetch_factor=4,
+            persistent_workers=True,
+        )
+
 
         if exists(self.vae.discr):
             (
@@ -329,19 +351,104 @@ class LAQTrainer(nn.Module):
         self.steps += 1
         return logs
 
-    def train(self, log_fn = noop):
+    def train(self, log_fn=noop):
         device = next(self.vae.parameters()).device
+
         if self.accelerator.is_main_process:
-            wandb.init(project='phenaki_cnn',name=self.results_folder_str.split('/')[-1], config={
-                "learning_rate": self.lr,
-                "batch_size": self.batch_size,
-                "num_train_steps": self.num_train_steps,
-            })
+            wandb.init(
+                project='phenaki_cnn',
+                name=self.results_folder_str.split('/')[-1],
+                config={
+                    "learning_rate": self.lr,
+                    "batch_size": self.batch_size,
+                    "num_train_steps": self.num_train_steps,
+                }
+            )
+
+        start_time = time.time()
+        last_log_time = start_time
+        last_log_step = int(self.steps.item())
+        log_every = 100
+
+        if self.is_main:
+            start_dt = datetime.now()
+            self.print("=" * 80)
+            self.print(f"Training started at: {start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+            self.print(f"Total train steps: {self.num_train_steps}")
+            self.print(f"Batch size: {self.batch_size}")
+            self.print(f"Learning rate: {self.lr}")
+            self.print(f"Results folder: {self.results_folder_str}")
+            self.print("=" * 80)
 
         while self.steps < self.num_train_steps:
             logs = self.train_step()
             log_fn(logs)
 
-        self.print('training complete')
+            steps = int(self.steps.item())
+
+            if self.is_main and steps % log_every == 0:
+                now = time.time()
+                elapsed = now - start_time
+
+                interval_time = now - last_log_time
+                interval_steps = max(steps - last_log_step, 1)
+
+                last_log_time = now
+                last_log_step = steps
+
+                avg_sec_per_step = elapsed / max(steps, 1)
+                recent_sec_per_step = interval_time / interval_steps
+
+                remaining_steps = max(self.num_train_steps - steps, 0)
+                eta_seconds_avg = remaining_steps * avg_sec_per_step
+                eta_seconds_recent = remaining_steps * recent_sec_per_step
+
+                finish_time_avg = datetime.now() + timedelta(seconds=eta_seconds_avg)
+                finish_time_recent = datetime.now() + timedelta(seconds=eta_seconds_recent)
+
+                loss = logs.get("loss", None)
+                num_unique_indices = logs.get("num_unique_indices", None)
+
+                msg = (
+                    f"[step {steps}/{self.num_train_steps}] "
+                    f"elapsed={str(timedelta(seconds=int(elapsed)))} | "
+                    f"avg_step={avg_sec_per_step:.3f}s | "
+                    f"recent_step={recent_sec_per_step:.3f}s | "
+                    f"ETA_avg={str(timedelta(seconds=int(eta_seconds_avg)))} | "
+                    f"ETA_recent={str(timedelta(seconds=int(eta_seconds_recent)))} | "
+                    f"finish_avg={finish_time_avg.strftime('%Y-%m-%d %H:%M:%S')} | "
+                    f"finish_recent={finish_time_recent.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+
+                if loss is not None:
+                    msg += f" | loss={loss:.6f}"
+
+                if num_unique_indices is not None:
+                    msg += f" | unique={num_unique_indices}"
+
+                self.print(msg)
+
+                if self.accelerator.is_main_process:
+                    wandb.log(
+                        {
+                            "time/elapsed_hours": elapsed / 3600.0,
+                            "time/avg_sec_per_step": avg_sec_per_step,
+                            "time/recent_sec_per_step": recent_sec_per_step,
+                            "time/eta_hours_avg": eta_seconds_avg / 3600.0,
+                            "time/eta_hours_recent": eta_seconds_recent / 3600.0,
+                        },
+                        step=steps,
+                    )
+
+        total_time = time.time() - start_time
+
+        if self.is_main:
+            end_dt = datetime.now()
+            self.print("=" * 80)
+            self.print("training complete")
+            self.print(f"Finished at: {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+            self.print(f"Total elapsed time: {str(timedelta(seconds=int(total_time)))}")
+            self.print("=" * 80)
+
         if self.accelerator.is_main_process:
-            wandb.finish()  
+            wandb.finish()

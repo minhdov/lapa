@@ -17,3 +17,9 @@ laq/results_stage25_final/
 laq/results_stage25_final_feature/
 logs
 laq/debug_depth1.png
+laq/results-sthv2-libero-half/
+laq/results-sthv2-libero/
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
