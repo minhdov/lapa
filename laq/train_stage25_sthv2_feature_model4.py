@@ -6,9 +6,13 @@ from torchvision.utils import save_image
 import torch
 
 
-z_rgb_feature_manifest = "/datasets/ssv2/nips/features/z_rgb_train_all_manifest.json"
-z_depth_feature_manifest = "/datasets/ssv2/nips/features_depth_stage1/z_depth_train_stage1_manifest.json"
-z_depth_path = "/datasets/ssv2/nips/z_depth_train.jsonl"
+# z_rgb_feature_manifest = "/datasets/ssv2/nips/features/z_rgb_train_all_manifest.json"
+# z_depth_feature_manifest = "/datasets/ssv2/nips/features_depth_stage1/z_depth_train_stage1_manifest.json"
+# z_depth_path = "/datasets/ssv2/nips/z_depth_train.jsonl"
+
+z_rgb_feature_manifest = "/datasets/ssv2_libero_stage25_model4/z_rgb_train_mixed_manifest.json"
+z_depth_feature_manifest = "/datasets/ssv2_libero_stage25_model4/z_depth_train_mixed_manifest.json"
+z_depth_path = "/datasets/ssv2_libero_stage25_model4/z_depth_train_mixed.jsonl"
 
 
 dataset = Stage252DatasetModel4(
@@ -70,21 +74,6 @@ laq = LatentActionQuantizationStage25Model4(
 ).cuda()
 
 
-# trainer = LAQStage25TrainerModel4(
-#     laq,
-#     dataset=dataset,
-#     batch_size=128,
-#     grad_accum_every=1,
-#     num_train_steps=70001,
-#     results_folder="results_model4_depth_rgb_to_zdepth_feature",
-#     lr=1e-4,
-#     save_model_every=5000,
-#     log_every=100,
-#     wandb_project="lapa_depth_model4",
-#     wandb_run_name="model4_depth_rgb_to_zdepth_feature",
-#     save_best=True,
-#     best_metric="loss",
-# )
 
 trainer = LAQStage25TrainerModel4(
     laq,
@@ -92,14 +81,14 @@ trainer = LAQStage25TrainerModel4(
     batch_size=128,
     grad_accum_every=1,
     num_train_steps=70001,
-    results_folder="results_model4_depth_rgb_to_zdepth_feature",
+    results_folder="results_model4_depth_rgb_to_zdepth_feature_libero_ssv2",
     lr=1e-4,
     save_model_every=5000,
     log_every=100,
     num_workers=16,
     pin_memory=False,
     wandb_project="lapa_depth_model4",
-    wandb_run_name="model4_depth_rgb_to_zdepth_feature",
+    wandb_run_name="model4_depth_rgb_to_zdepth_feature_libero_ssv2",
     save_best=True,
     best_metric="loss",
 )

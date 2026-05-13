@@ -4,8 +4,11 @@ from laq_model import Stage25Dataset
 from torchvision.utils import save_image
 import torch
 
-z_rgb_feature_manifest = "/datasets/ssv2/nips/features/z_rgb_train_all_manifest.json"
-z_depth_path = "/datasets/ssv2/nips/z_depth_train.jsonl"
+# z_rgb_feature_manifest = "/datasets/ssv2/nips/features/z_rgb_train_all_manifest.json"
+# z_depth_path = "/datasets/ssv2/nips/z_depth_train.jsonl"
+
+z_rgb_feature_manifest = "/datasets/ssv2_libero_stage25_model4/z_rgb_train_mixed_manifest.json"
+z_depth_path = "/datasets/ssv2_libero_stage25_model4/z_depth_train_mixed.jsonl"
 
 dataset = Stage25Dataset(
     z_depth_path=z_depth_path,
@@ -44,13 +47,13 @@ trainer = LAQStage25Trainer(
     batch_size=128,
     grad_accum_every=1,
     num_train_steps=70001,
-    results_folder="results_stage25_final_feature",
+    results_folder="results_stage25_final_feature_model2_ssv2_libero",
     lr=1e-4,
     save_model_every=5000,
     log_every=100,
 )
 
-trainer.load("results_stage25_final_feature/init/stage25.10000.pt", strict=True)
+# trainer.load("results_stage25_final_feature/init/stage25.10000.pt", strict=True)
 
 
 trainer.train()

@@ -38,19 +38,19 @@ def main():
     parser.add_argument(
         "--root",
         type=str,
-        default="/datasets/something-something-v2/nips/30k/frames_train",
+        default="/storage/minh/philo/datasets/libero_ssv2/libero_images_ssv2",
         help="Folder containing video folders, e.g. frames_train.",
     )
     parser.add_argument(
         "--out_dir",
         type=str,
-        default="/datasets/something-something-v2/nips/30k/shards",
+        default="/storage/minh/philo/datasets/libero_ssv2/shards",
         help="Output folder for shard txt files.",
     )
     parser.add_argument(
         "--num_shards",
         type=int,
-        default=6,
+        default=4,
         help="Number of shards to create.",
     )
     parser.add_argument(
