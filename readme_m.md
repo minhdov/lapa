@@ -10,7 +10,17 @@ docker build -t lapa-depth .
 
 2. Launch docker container
 docker run --gpus all -it --user 1015:100 \
-  --name lapa_depth_dev \
+  --name lapa_depth_dev2 \
+  --ipc=host \
+  -v $PWD:/workspace/lapa \
+  -v /storage/minh/philo/datasets:/datasets \
+  -v /storage/minh/philo/checkpoints:/checkpoints \
+  -v /storage/minh/philo/outputs:/outputs \
+  -w /workspace/lapa \
+  lapa-depth bash
+
+  docker run --gpus all -it \
+  --name lapa_depth_dev3 \
   --ipc=host \
   -v $PWD:/workspace/lapa \
   -v /storage/minh/philo/datasets:/datasets \

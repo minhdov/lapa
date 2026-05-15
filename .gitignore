@@ -23,3 +23,5 @@ laq/results-sthv2-libero/
 __pycache__/
 *.py[cod]
 *$py.class
+
+laq/results*

@@ -2,4 +2,4 @@
 
 
 mkdir -p logs
-python train_sthv2.py
+CUDA_VISIBLE_DEVICES=0 python train_sthv2.py
