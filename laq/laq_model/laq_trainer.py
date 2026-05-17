@@ -123,20 +123,6 @@ class LAQTrainer(nn.Module):
 
         self.valid_ds = self.ds
 
-
-        # self.dl = DataLoader(
-        #     self.ds,
-        #     batch_size = batch_size,
-        #     shuffle=True,
-        #     num_workers=4,  # or more depending on your CPU cores
-        #     pin_memory=True,  # Helps with faster data transfer to GPU
-        #     prefetch_factor=2,
-        #     )
-
-        # self.valid_dl = DataLoader(
-        #     self.valid_ds,
-        #     batch_size = batch_size,
-        #     num_workers = 4)
         
         self.dl = DataLoader(
             self.ds,
@@ -144,16 +130,16 @@ class LAQTrainer(nn.Module):
             shuffle=True,
             num_workers=16,
             pin_memory=True,
-            prefetch_factor=4,
+            prefetch_factor=2,
             persistent_workers=True,
         )
 
         self.valid_dl = DataLoader(
             self.valid_ds,
             batch_size=batch_size,
-            num_workers=8,
+            num_workers=4,
             pin_memory=True,
-            prefetch_factor=4,
+            prefetch_factor=2,
             persistent_workers=True,
         )
 
@@ -263,7 +249,7 @@ class LAQTrainer(nn.Module):
 
         for _ in range(self.grad_accum_every):
             img, depth = next(self.dl_iter)
-            img = depth
+            # img = depth
             img = img.to(device)
 
             # with self.accelerator.autocast():
@@ -300,7 +286,7 @@ class LAQTrainer(nn.Module):
                 model.eval()
 
                 valid_data, depth_data = next(self.valid_dl_iter)
-                valid_data = depth_data
+                # valid_data = depth_data
 
                 valid_data = valid_data.to(device)
 
