@@ -44,6 +44,7 @@ docker run --gpus all -it \
 3. Launch new docker
 docker exec -it lapa_depth_dev bash
 docker exec -it lapa_depth_dev2 bash
+docker exec -it lapa_depth_dev3 bash
 
 Pack docker image: 
 docker save -o lapa-depth.tar lapa-depth:latest
