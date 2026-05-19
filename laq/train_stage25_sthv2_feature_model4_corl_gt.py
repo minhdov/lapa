@@ -1,6 +1,14 @@
-from laq_model import LatentActionQuantizationStage25Model4
-from laq_model import LAQStage25TrainerModel4
-from laq_model import Stage252DatasetModel4
+from laq_model.latent_action_quantization_stage25_feature_model4 import (
+    LatentActionQuantizationStage25Model4,
+)
+
+from laq_model.laq_stage25_trainer_feature_model4 import (
+    LAQStage25TrainerModel4,
+)
+
+from laq_model.data_stage25_feature_model4 import (
+    Stage252DatasetModel4,
+)
 
 from torchvision.utils import save_image
 import torch
