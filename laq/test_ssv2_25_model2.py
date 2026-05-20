@@ -5,8 +5,13 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from laq_model import LatentActionQuantizationStage25
-from laq_model import Stage25Dataset
+from laq_model.latent_action_quantization_stage25_feature import LatentActionQuantizationStage25
+from laq_model.data_stage25_feature import Stage25Dataset
+
+
+MODEL_NAME = "model2"
+STAGE_NAME = "stage25"
+DATASET_NAME = "libero10_val"
 
 
 def build_model(args, device):
@@ -48,21 +53,59 @@ class FeaturePartWriter:
         self.buffer = {
             "id": [],
             "depth1_path": [],
-            "z_depth_indices": [],   # model2 predicted latent tokens
-            "z_depth_gt": [],        # original Stage 1 depth latent tokens
-            "z_depth_feature": [],   # model2 feature output
+
+            # RGB input
+            "z_rgb_feature_input": [],
+            "z_rgb_indices_input": [],
+
+            # Depth output / target
+            "z_depth_indices_pred": [],
+            "z_depth_indices_gt": [],
+            "z_depth_feature_pred": [],
+
+            # Optional confidence
+            "confidence": [],
         }
 
         self.parts = []
         self.part_idx = 0
         self.total_samples = 0
 
-    def add(self, sample_id, depth1_path, z_depth_indices, z_depth_gt, z_depth_feature):
+    def add(
+        self,
+        sample_id,
+        depth1_path,
+        z_rgb_feature_input,
+        z_depth_indices_pred,
+        z_depth_indices_gt,
+        z_depth_feature_pred,
+        confidence,
+        z_rgb_indices_input=None,
+    ):
         self.buffer["id"].append(str(sample_id))
         self.buffer["depth1_path"].append(str(depth1_path))
-        self.buffer["z_depth_indices"].append(z_depth_indices.detach().cpu().long())
-        self.buffer["z_depth_gt"].append(z_depth_gt.detach().cpu().long())
-        self.buffer["z_depth_feature"].append(z_depth_feature.detach().cpu().float())
+
+        self.buffer["z_rgb_feature_input"].append(
+            z_rgb_feature_input.detach().cpu().float()
+        )
+
+        if z_rgb_indices_input is not None:
+            self.buffer["z_rgb_indices_input"].append(
+                z_rgb_indices_input.detach().cpu().long()
+            )
+
+        self.buffer["z_depth_indices_pred"].append(
+            z_depth_indices_pred.detach().cpu().long()
+        )
+        self.buffer["z_depth_indices_gt"].append(
+            z_depth_indices_gt.detach().cpu().long()
+        )
+        self.buffer["z_depth_feature_pred"].append(
+            z_depth_feature_pred.detach().cpu().float()
+        )
+        self.buffer["confidence"].append(
+            confidence.detach().cpu().float()
+        )
 
         self.flush(force=False)
 
@@ -75,30 +118,68 @@ class FeaturePartWriter:
         if not force and n < self.part_size:
             return
 
-        z_depth_indices = torch.stack(self.buffer["z_depth_indices"], dim=0).long()
-        z_depth_gt = torch.stack(self.buffer["z_depth_gt"], dim=0).long()
-        z_depth_feature = torch.stack(self.buffer["z_depth_feature"], dim=0).float()
+        z_rgb_feature_input = torch.stack(
+            self.buffer["z_rgb_feature_input"], dim=0
+        ).float()
+
+        z_depth_indices_pred = torch.stack(
+            self.buffer["z_depth_indices_pred"], dim=0
+        ).long()
+
+        z_depth_indices_gt = torch.stack(
+            self.buffer["z_depth_indices_gt"], dim=0
+        ).long()
+
+        z_depth_feature_pred = torch.stack(
+            self.buffer["z_depth_feature_pred"], dim=0
+        ).float()
+
+        confidence = torch.stack(
+            self.buffer["confidence"], dim=0
+        ).float()
 
         out_path = self.output_dir / f"{self.prefix}_part{self.part_idx:05d}.pt"
 
         pkg = {
             "id": list(self.buffer["id"]),
             "depth1_path": list(self.buffer["depth1_path"]),
-            "z_depth_indices": z_depth_indices,
-            "z_depth_gt": z_depth_gt,
-            "z_depth_feature": z_depth_feature,
-        }
 
-        torch.save(pkg, out_path)
+            "z_rgb_feature_input": z_rgb_feature_input,
+
+            "z_depth_indices_pred": z_depth_indices_pred,
+            "z_depth_indices_gt": z_depth_indices_gt,
+            "z_depth_feature_pred": z_depth_feature_pred,
+
+            "confidence": confidence,
+
+            "model_name": MODEL_NAME,
+            "stage": STAGE_NAME,
+            "dataset": DATASET_NAME,
+        }
 
         part_info = {
             "part": self.part_idx,
             "path": str(out_path),
             "num_samples": n,
-            "z_depth_indices_shape": list(z_depth_indices.shape),
-            "z_depth_gt_shape": list(z_depth_gt.shape),
-            "z_depth_feature_shape": list(z_depth_feature.shape),
+
+            "z_rgb_feature_input_shape": list(z_rgb_feature_input.shape),
+
+            "z_depth_indices_pred_shape": list(z_depth_indices_pred.shape),
+            "z_depth_indices_gt_shape": list(z_depth_indices_gt.shape),
+            "z_depth_feature_pred_shape": list(z_depth_feature_pred.shape),
+
+            "confidence_shape": list(confidence.shape),
         }
+
+        if len(self.buffer["z_rgb_indices_input"]) > 0:
+            z_rgb_indices_input = torch.stack(
+                self.buffer["z_rgb_indices_input"], dim=0
+            ).long()
+
+            pkg["z_rgb_indices_input"] = z_rgb_indices_input
+            part_info["z_rgb_indices_input_shape"] = list(z_rgb_indices_input.shape)
+
+        torch.save(pkg, out_path)
 
         self.parts.append(part_info)
         self.total_samples += n
@@ -106,8 +187,9 @@ class FeaturePartWriter:
         print(
             f"Saved feature part: {out_path} | "
             f"samples={n} | "
-            f"z_depth_indices={list(z_depth_indices.shape)} | "
-            f"z_depth_feature={list(z_depth_feature.shape)}"
+            f"z_rgb_feature_input={list(z_rgb_feature_input.shape)} | "
+            f"z_depth_indices_pred={list(z_depth_indices_pred.shape)} | "
+            f"z_depth_feature_pred={list(z_depth_feature_pred.shape)}"
         )
 
         self.part_idx += 1
@@ -121,15 +203,51 @@ class FeaturePartWriter:
             "total_samples": self.total_samples,
             "num_parts": len(self.parts),
             "feature_output_dir": str(self.output_dir),
+
+            "checkpoint": args.checkpoint,
             "source_z_depth_path": args.z_depth_path,
             "source_z_rgb_feature_manifest": args.z_rgb_feature_manifest,
-            "checkpoint": args.checkpoint,
             "output_jsonl": str(output_jsonl_path),
+
+            "model_name": MODEL_NAME,
+            "stage": STAGE_NAME,
+            "dataset": DATASET_NAME,
+            "standardized_schema": True,
+
+            "model_definition": (
+                "Model2 / Stage 2.5: depth1 + z_rgb_feature_input "
+                "-> z_depth_indices_pred + z_depth_feature_pred"
+            ),
+
+            "feature_key": "z_depth_feature_pred",
+            "feature_key_pred": "z_depth_feature_pred",
+            "indices_key_pred": "z_depth_indices_pred",
+            "indices_key_gt": "z_depth_indices_gt",
+            "rgb_feature_key_input": "z_rgb_feature_input",
+            "rgb_indices_key_input": "z_rgb_indices_input",
+
             "feature_definition": {
-                "z_depth_indices": "Predicted latent action tokens from Stage 2.5/model2",
-                "z_depth_gt": "Ground-truth Stage 1 depth latent tokens from dataset",
-                "z_depth_feature": "Model2 feature output / z_refined_feature",
+                "z_rgb_feature_input": (
+                    "RGB feature from pretrained LAPA / Stage 2, used as input."
+                ),
+                "z_rgb_indices_input": (
+                    "RGB latent token indices from pretrained LAPA / Stage 2, "
+                    "if available."
+                ),
+                "z_depth_indices_pred": (
+                    "Predicted depth latent token indices from logits.argmax(dim=-1)."
+                ),
+                "z_depth_indices_gt": (
+                    "Ground-truth Stage 1 depth latent token indices from z_depth_path."
+                ),
+                "z_depth_feature_pred": (
+                    "Predicted/refined feature output from Stage 2.5 Model 2."
+                ),
+                "confidence": (
+                    "Maximum softmax probability per predicted token."
+                ),
             },
+
             "parts": self.parts,
         }
 
@@ -183,6 +301,7 @@ def run_inference(args):
     total = 0
     correct = 0
     total_tokens = 0
+    seq_correct = 0
 
     with out_path.open("w", encoding="utf-8") as fout:
         with torch.no_grad():
@@ -194,11 +313,6 @@ def run_inference(args):
                 z_rgb_features = batch["z_rgb_features"].to(device, non_blocking=True).float()
                 z_depth_gt = batch["z_depth_indices"].to(device, non_blocking=True).long()
 
-                # -------------------------------------------------------
-                # Model2 inference
-                # logits: [B, code_seq_len, codebook_size]
-                # z_refined_feature: [B, dim], usually [B, 1024]
-                # -------------------------------------------------------
                 logits, z_refined_feature = model(
                     depth1=depth1,
                     z_rgb_features=z_rgb_features,
@@ -209,9 +323,11 @@ def run_inference(args):
 
                 batch_correct = (pred_indices == z_depth_gt).sum().item()
                 batch_tokens = z_depth_gt.numel()
+                batch_seq_correct = (pred_indices == z_depth_gt).all(dim=-1).sum().item()
 
                 correct += batch_correct
                 total_tokens += batch_tokens
+                seq_correct += batch_seq_correct
                 total += depth1.shape[0]
 
                 probs = torch.softmax(logits, dim=-1)
@@ -222,70 +338,93 @@ def run_inference(args):
                 pred_indices_cpu = pred_indices.detach().cpu().long()
                 z_depth_gt_cpu = z_depth_gt.detach().cpu().long()
                 z_refined_feature_cpu = z_refined_feature.detach().cpu().float()
+                z_rgb_features_cpu = z_rgb_features.detach().cpu().float()
                 confidence_cpu = confidence.detach().cpu().float()
+
+                if args.keep_z_rgb_indices and "z_rgb_indices" in batch:
+                    z_rgb_indices_cpu = batch["z_rgb_indices"].detach().cpu().long()
+                else:
+                    z_rgb_indices_cpu = None
 
                 for i in range(batch_size):
                     sample_id = str(batch["id"][i])
                     depth1_path = str(batch["depth1_path"][i])
 
-                    # Save lightweight JSONL prediction
                     item = {
                         "id": sample_id,
                         "depth1_path": depth1_path,
-                        "z_rgb_features_shape": list(z_rgb_features[i].shape),
-                        "z_depth_gt": tensor_to_list(z_depth_gt_cpu[i]),
-                        "z_depth_pred": tensor_to_list(pred_indices_cpu[i]),
+
+                        "z_rgb_feature_input_shape": list(z_rgb_features_cpu[i].shape),
+
+                        "z_depth_indices_gt": tensor_to_list(z_depth_gt_cpu[i]),
+                        "z_depth_indices_pred": tensor_to_list(pred_indices_cpu[i]),
+                        "z_depth_feature_pred_shape": list(z_refined_feature_cpu[i].shape),
+
                         "confidence": tensor_to_list(confidence_cpu[i]),
+
+                        "model_name": MODEL_NAME,
+                        "stage": STAGE_NAME,
+                        "dataset": DATASET_NAME,
                     }
 
-                    if args.keep_z_rgb_indices and "z_rgb_indices" in batch:
-                        item["z_rgb_indices"] = tensor_to_list(batch["z_rgb_indices"][i])
+                    if args.keep_z_rgb_indices and z_rgb_indices_cpu is not None:
+                        item["z_rgb_indices_input"] = tensor_to_list(z_rgb_indices_cpu[i])
 
                     if args.save_rgb_feature_jsonl:
-                        item["z_rgb_features"] = tensor_to_list(z_rgb_features[i])
+                        item["z_rgb_feature_input"] = tensor_to_list(z_rgb_features_cpu[i])
 
                     if args.save_model2_feature_jsonl:
-                        item["z_depth_feature"] = tensor_to_list(z_refined_feature_cpu[i])
+                        item["z_depth_feature_pred"] = tensor_to_list(z_refined_feature_cpu[i])
 
                     fout.write(json.dumps(item, ensure_ascii=False) + "\n")
 
-                    # Save model2 feature output into .pt files
                     feature_writer.add(
                         sample_id=sample_id,
                         depth1_path=depth1_path,
-                        z_depth_indices=pred_indices_cpu[i],
-                        z_depth_gt=z_depth_gt_cpu[i],
-                        z_depth_feature=z_refined_feature_cpu[i],
+                        z_rgb_feature_input=z_rgb_features_cpu[i],
+                        z_rgb_indices_input=(
+                            z_rgb_indices_cpu[i]
+                            if args.keep_z_rgb_indices and z_rgb_indices_cpu is not None
+                            else None
+                        ),
+                        z_depth_indices_pred=pred_indices_cpu[i],
+                        z_depth_indices_gt=z_depth_gt_cpu[i],
+                        z_depth_feature_pred=z_refined_feature_cpu[i],
+                        confidence=confidence_cpu[i],
                     )
 
                 if batch_idx % args.log_every == 0:
-                    acc = correct / max(total_tokens, 1)
+                    token_acc = correct / max(total_tokens, 1)
+                    seq_acc = seq_correct / max(total, 1)
                     print(
                         f"batch {batch_idx} | "
                         f"samples {total} | "
-                        f"token_acc {acc:.4f} | "
-                        f"model2_feature_shape {list(z_refined_feature.shape)}"
+                        f"token_acc {token_acc:.4f} | "
+                        f"seq_acc {seq_acc:.4f} | "
+                        f"z_depth_feature_pred_shape {list(z_refined_feature.shape)}"
                     )
 
     feature_writer.flush(force=True)
     feature_writer.save_manifest(args=args, output_jsonl_path=out_path)
 
     final_acc = correct / max(total_tokens, 1)
+    final_seq_acc = seq_correct / max(total, 1)
 
     print(f"Done. Wrote predictions to: {out_path}")
     print(f"Done. Wrote model2 features to: {args.feature_output_dir}")
     print(f"Total samples: {total}")
     print(f"Token accuracy: {final_acc:.4f}")
+    print(f"Sequence accuracy: {final_seq_acc:.4f}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Inference for LAPA-depth Stage 2.5 model, saving model2 feature output."
+        description=(
+            "Inference for LAPA-depth Stage 2.5 Model 2, "
+            "saving standardized JSONL + .pt feature output."
+        )
     )
 
-    # -------------------------------------------------------
-    # Input / checkpoint
-    # -------------------------------------------------------
     parser.add_argument(
         "--checkpoint",
         type=str,
@@ -307,9 +446,6 @@ def main():
         help="Depth JSONL with depth image path and z_depth_indices/delta labels.",
     )
 
-    # -------------------------------------------------------
-    # Output
-    # -------------------------------------------------------
     parser.add_argument(
         "--output_jsonl",
         type=str,
@@ -338,9 +474,6 @@ def main():
         help="Number of samples per saved .pt part.",
     )
 
-    # -------------------------------------------------------
-    # Model config
-    # -------------------------------------------------------
     parser.add_argument("--image_size", type=int, default=256)
     parser.add_argument("--depth_scale", type=float, default=65535.0)
 
@@ -353,18 +486,12 @@ def main():
     parser.add_argument("--heads", type=int, default=16)
     parser.add_argument("--code_seq_len", type=int, default=4)
 
-    # -------------------------------------------------------
-    # Runtime
-    # -------------------------------------------------------
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--max_batches", type=int, default=None)
     parser.add_argument("--log_every", type=int, default=20)
     parser.add_argument("--cpu", action="store_true")
 
-    # -------------------------------------------------------
-    # Dataset options
-    # -------------------------------------------------------
     parser.add_argument(
         "--feature_key",
         type=str,
@@ -395,19 +522,16 @@ def main():
     parser.add_argument("--strict_load", action="store_true")
     parser.add_argument("--strict_data", action="store_true")
 
-    # -------------------------------------------------------
-    # Debug options
-    # -------------------------------------------------------
     parser.add_argument(
         "--save_rgb_feature_jsonl",
         action="store_true",
-        help="Save full z_rgb_features into JSONL. Not recommended unless debugging.",
+        help="Save full z_rgb_feature_input into JSONL. Not recommended unless debugging.",
     )
 
     parser.add_argument(
         "--save_model2_feature_jsonl",
         action="store_true",
-        help="Save full model2 feature into JSONL. Not recommended unless debugging.",
+        help="Save full z_depth_feature_pred into JSONL. Not recommended unless debugging.",
     )
 
     args = parser.parse_args()

@@ -9,8 +9,8 @@ source .venv/bin/activate
 docker build -t lapa-depth .
 
 2. Launch docker container
-docker run --gpus all -it --user 1015:100 \
-  --name lapa_depth_dev2 \
+docker run --gpus all -it \
+  --name lapa_depth_dev4 \
   --ipc=host \
   -v $PWD:/workspace/lapa \
   -v /storage/minh/philo/datasets:/datasets \
@@ -41,7 +41,7 @@ docker run --gpus all -it \
 
 
 docker run --gpus all -it \
-  --name lapa_depth_dev3 \
+  --name lapa_depth_dev4 \
   --ipc=host \
   -v $PWD:/workspace/lapa \
   -v /home/do/Workspace/philo/datasets:/datasets \

@@ -3,7 +3,6 @@
 
 mkdir -p logs
 
-
 CUDA_VISIBLE_DEVICES=2 python inference_stage25_model4.py \
   --checkpoint results_model4_depth_rgb_to_zdepth_feature/model4.65000.pt \
   --z_depth_path /datasets/ssv2/nips/z_depth_train.jsonl \

@@ -10,3 +10,5 @@ CUDA_VISIBLE_DEVICES=1 python inference_stage25_feature_only.py \
   --batch_size 64 \
   --num_workers 0 \
   --max_batches 5
+
+  
