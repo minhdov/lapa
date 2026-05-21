@@ -1,0 +1,5 @@
+python train_stage25_sthv2_feature_model2_percent.py --data_percent 5
+python train_stage25_sthv2_feature_model2_percent.py --data_percent 10
+python train_stage25_sthv2_feature_model2_percent.py --data_percent 20
+python train_stage25_sthv2_feature_model2_percent.py --data_percent 40
+python train_stage25_sthv2_feature_model2_percent.py --data_percent 80
