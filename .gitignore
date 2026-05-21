@@ -25,3 +25,5 @@ __pycache__/
 *$py.class
 
 laq/results*
+laq/debug*
+laq/outputs*

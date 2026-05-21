@@ -8,10 +8,15 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# from laq_model import LatentActionQuantizationStage25Model5
-# from laq_model import Stage252DatasetModel5
-from laq_model.latent_action_quantization_stage25_feature_model5 import LatentActionQuantizationStage25Model5
+from laq_model.latent_action_quantization_stage25_feature_model5 import (
+    LatentActionQuantizationStage25Model5,
+)
 from laq_model.data_stage25_feature_model5 import Stage252DatasetModel5
+
+
+MODEL_NAME = "model5"
+STAGE_NAME = "stage25"
+DATASET_NAME = "libero10_val"
 
 
 def tensor_to_cpu(x):
@@ -71,39 +76,52 @@ def flush_feature_buffer(
 
     out_path = feature_dir / f"{feature_prefix}_part{feature_part_idx:05d}.pt"
 
-    pred_z_depth_feature = torch.stack(
-        feature_buffer["pred_z_depth_feature"],
+    z_depth_feature_pred = torch.stack(
+        feature_buffer["z_depth_feature_pred"],
         dim=0,
     ).float()
 
     pkg = {
         "id": list(feature_buffer["id"]),
-        "pred_z_depth_feature": pred_z_depth_feature,
+
+        "z_depth_feature_pred": z_depth_feature_pred,
+
+        "model_name": MODEL_NAME,
+        "stage": STAGE_NAME,
+        "dataset": DATASET_NAME,
     }
 
     part_info = {
         "part": feature_part_idx,
         "path": str(out_path),
         "num_samples": n,
-        "pred_z_depth_feature_shape": list(pred_z_depth_feature.shape),
+        "z_depth_feature_pred_shape": list(z_depth_feature_pred.shape),
     }
 
-    if len(feature_buffer["z_rgb_features"]) == n:
-        z_rgb_features = torch.stack(feature_buffer["z_rgb_features"], dim=0).float()
-        pkg["z_rgb_features"] = z_rgb_features
-        part_info["z_rgb_features_shape"] = list(z_rgb_features.shape)
+    if len(feature_buffer["z_rgb_feature_input"]) == n:
+        z_rgb_feature_input = torch.stack(
+            feature_buffer["z_rgb_feature_input"],
+            dim=0,
+        ).float()
 
-    if len(feature_buffer["gt_z_depth_feature"]) == n:
-        gt_z_depth_feature = torch.stack(feature_buffer["gt_z_depth_feature"], dim=0).float()
-        pkg["gt_z_depth_feature"] = gt_z_depth_feature
-        part_info["gt_z_depth_feature_shape"] = list(gt_z_depth_feature.shape)
+        pkg["z_rgb_feature_input"] = z_rgb_feature_input
+        part_info["z_rgb_feature_input_shape"] = list(z_rgb_feature_input.shape)
+
+    if len(feature_buffer["z_depth_feature_gt"]) == n:
+        z_depth_feature_gt = torch.stack(
+            feature_buffer["z_depth_feature_gt"],
+            dim=0,
+        ).float()
+
+        pkg["z_depth_feature_gt"] = z_depth_feature_gt
+        part_info["z_depth_feature_gt_shape"] = list(z_depth_feature_gt.shape)
 
     torch.save(pkg, out_path)
     feature_parts.append(part_info)
 
     print(
         f"Saved part: {out_path} | samples={n} | "
-        f"pred_z_depth_feature_shape={list(pred_z_depth_feature.shape)}"
+        f"z_depth_feature_pred_shape={list(z_depth_feature_pred.shape)}"
     )
 
     for k in feature_buffer:
@@ -114,14 +132,14 @@ def flush_feature_buffer(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Model 5 inference: z_rgb_features -> pred_z_depth_feature"
+        description="Model 5 inference: z_rgb_feature_input -> z_depth_feature_pred"
     )
 
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--z_rgb_feature_manifest", type=str, required=True)
     parser.add_argument("--z_depth_feature_manifest", type=str, required=True)
     parser.add_argument("--output_dir", type=str, required=True)
-    parser.add_argument("--output_prefix", type=str, default="model5_pred_z_depth_feature")
+    parser.add_argument("--output_prefix", type=str, default="model5_z_depth_feature_pred")
 
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--num_workers", type=int, default=8)
@@ -210,9 +228,9 @@ def main():
 
     feature_buffer = {
         "id": [],
-        "z_rgb_features": [],
-        "gt_z_depth_feature": [],
-        "pred_z_depth_feature": [],
+        "z_rgb_feature_input": [],
+        "z_depth_feature_gt": [],
+        "z_depth_feature_pred": [],
     }
 
     feature_parts = []
@@ -229,41 +247,48 @@ def main():
                 break
 
             z_rgb_features = batch["z_rgb_features"].cuda(non_blocking=True).float()
-            gt_z_depth_feature = batch["z_depth_feature"].cuda(non_blocking=True).float()
+            z_depth_feature_gt = batch["z_depth_feature"].cuda(non_blocking=True).float()
 
-            pred_z_depth_feature = model.extract_z_depth_feature(
+            z_depth_feature_pred = model.extract_z_depth_feature(
                 z_rgb_features=z_rgb_features,
             )
 
-            if pred_z_depth_feature.shape != gt_z_depth_feature.shape:
+            if z_depth_feature_pred.shape != z_depth_feature_gt.shape:
                 raise RuntimeError(
                     f"Prediction and GT shape mismatch: "
-                    f"pred={tuple(pred_z_depth_feature.shape)}, "
-                    f"gt={tuple(gt_z_depth_feature.shape)}"
+                    f"pred={tuple(z_depth_feature_pred.shape)}, "
+                    f"gt={tuple(z_depth_feature_gt.shape)}"
                 )
 
             if args.compute_metrics:
                 mse = F.mse_loss(
-                    pred_z_depth_feature,
-                    gt_z_depth_feature,
+                    z_depth_feature_pred,
+                    z_depth_feature_gt,
                     reduction="none",
                 )
                 mse = mse.reshape(mse.shape[0], -1).mean(dim=1)
 
-                pred_flat = pred_z_depth_feature.reshape(pred_z_depth_feature.shape[0], -1)
-                gt_flat = gt_z_depth_feature.reshape(gt_z_depth_feature.shape[0], -1)
+                pred_flat = z_depth_feature_pred.reshape(
+                    z_depth_feature_pred.shape[0],
+                    -1,
+                )
+                gt_flat = z_depth_feature_gt.reshape(
+                    z_depth_feature_gt.shape[0],
+                    -1,
+                )
+
                 cosine_loss = 1.0 - F.cosine_similarity(
                     pred_flat,
                     gt_flat,
                     dim=-1,
                 )
 
-                bs = pred_z_depth_feature.shape[0]
+                bs = z_depth_feature_pred.shape[0]
                 total_mse += float(mse.sum().detach().cpu())
                 total_cosine_loss += float(cosine_loss.sum().detach().cpu())
                 total_metric_samples += bs
 
-            pred_cpu = tensor_to_cpu(pred_z_depth_feature)
+            pred_cpu = tensor_to_cpu(z_depth_feature_pred)
             z_rgb_cpu = tensor_to_cpu(batch["z_rgb_features"]) if args.save_rgb else None
             gt_cpu = tensor_to_cpu(batch["z_depth_feature"]) if args.save_gt else None
 
@@ -271,13 +296,13 @@ def main():
 
             for i in range(pred_cpu.shape[0]):
                 feature_buffer["id"].append(str(batch_ids[i]))
-                feature_buffer["pred_z_depth_feature"].append(pred_cpu[i])
+                feature_buffer["z_depth_feature_pred"].append(pred_cpu[i])
 
                 if args.save_rgb:
-                    feature_buffer["z_rgb_features"].append(z_rgb_cpu[i])
+                    feature_buffer["z_rgb_feature_input"].append(z_rgb_cpu[i])
 
                 if args.save_gt:
-                    feature_buffer["gt_z_depth_feature"].append(gt_cpu[i])
+                    feature_buffer["z_depth_feature_gt"].append(gt_cpu[i])
 
                 feature_part_idx, flushed_n = flush_feature_buffer(
                     feature_buffer=feature_buffer,
@@ -307,11 +332,42 @@ def main():
         "total_samples": total_samples,
         "num_parts": len(feature_parts),
         "feature_dir": str(output_dir),
+
         "checkpoint": args.checkpoint,
         "z_rgb_feature_manifest": args.z_rgb_feature_manifest,
         "z_depth_feature_manifest": args.z_depth_feature_manifest,
+
         "z_depth_feature_dim": z_depth_feature_dim,
         "predict_token_features": predict_token_features,
+
+        "model_name": MODEL_NAME,
+        "stage": STAGE_NAME,
+        "dataset": DATASET_NAME,
+        "standardized_schema": True,
+
+        "model_definition": (
+            "Model5 / Stage 2.5.5: z_rgb_feature_input -> z_depth_feature_pred"
+        ),
+
+        "feature_key": "z_depth_feature_pred",
+        "feature_key_pred": "z_depth_feature_pred",
+        "feature_key_gt": "z_depth_feature_gt",
+        "rgb_feature_key_input": "z_rgb_feature_input",
+
+        "feature_definition": {
+            "z_rgb_feature_input": (
+                "RGB feature from pretrained LAPA / Stage 2, used as input. "
+                "Saved only if --save_rgb is used."
+            ),
+            "z_depth_feature_pred": (
+                "Predicted depth feature from Model5 extract_z_depth_feature(z_rgb_feature_input)."
+            ),
+            "z_depth_feature_gt": (
+                "Ground-truth Stage 1 depth feature from z_depth_feature_manifest. "
+                "Saved only if --save_gt is used."
+            ),
+        },
+
         "parts": feature_parts,
     }
 

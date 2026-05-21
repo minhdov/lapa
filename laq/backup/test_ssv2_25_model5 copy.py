@@ -8,8 +8,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# from laq_model import LatentActionQuantizationStage25Model5
-# from laq_model import Stage252DatasetModel5
 from laq_model.latent_action_quantization_stage25_feature_model5 import LatentActionQuantizationStage25Model5
 from laq_model.data_stage25_feature_model5 import Stage252DatasetModel5
 
