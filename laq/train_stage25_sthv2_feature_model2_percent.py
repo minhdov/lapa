@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument(
         "--results_root",
         type=str,
-        default="results_stage25_final_feature_model2_ssv2",
+        default="/outputs/results_stage25_final_feature_model2_ssv2",
     )
 
     parser.add_argument("--batch_size", type=int, default=128)
