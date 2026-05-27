@@ -10,7 +10,7 @@ from beartype import beartype
 
 import torch
 from torch import nn
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, random_split, Subset
 from torchvision.utils import make_grid, save_image
 
 import torchvision.transforms as T
@@ -75,6 +75,8 @@ class LAQTrainer(nn.Module):
         accelerate_kwargs: dict = dict(),
         weights = None,
         offsets = None,
+        data_percent = 100.0,
+
     ):
         super().__init__()
         image_size = vae.image_size
@@ -95,6 +97,7 @@ class LAQTrainer(nn.Module):
         self.num_train_steps = num_train_steps
         self.batch_size = batch_size
         self.grad_accum_every = grad_accum_every
+        self.data_percent = data_percent
 
         self.vae.discr = None # this seems to be missing
 
@@ -119,7 +122,37 @@ class LAQTrainer(nn.Module):
         
         
         # sthv2 training
+        # sthv2 training
         self.ds = ImageVideoDataset(folder, depth_folder, image_size, offset=offsets)
+
+        # Use FIRST N% of dataset, not random
+        assert 0 < data_percent <= 100, "data_percent must be in (0, 100]"
+
+        total_len = len(self.ds)
+        subset_len = max(1, int(total_len * data_percent / 100.0))
+
+        self.total_dataset_samples = total_len
+        self.used_dataset_samples = subset_len
+        self.data_percent = data_percent
+
+        if data_percent < 100:
+            self.ds = Subset(self.ds, list(range(subset_len)))
+
+            if self.is_main:
+                self.print("=" * 80)
+                self.print(f"Dataset folder: {folder}")
+                self.print(f"Total dataset samples: {total_len}")
+                self.print(f"Using FIRST samples: {subset_len}")
+                self.print(f"Data percent: {data_percent}%")
+                self.print("=" * 80)
+        else:
+            if self.is_main:
+                self.print("=" * 80)
+                self.print(f"Dataset folder: {folder}")
+                self.print(f"Total dataset samples: {total_len}")
+                self.print(f"Using full dataset samples: {total_len}")
+                self.print(f"Data percent: {data_percent}%")
+                self.print("=" * 80)
 
         self.valid_ds = self.ds
 
@@ -348,6 +381,7 @@ class LAQTrainer(nn.Module):
                     "learning_rate": self.lr,
                     "batch_size": self.batch_size,
                     "num_train_steps": self.num_train_steps,
+                    "data_percent": self.data_percent,
                 }
             )
 
