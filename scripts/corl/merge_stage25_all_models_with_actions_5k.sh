@@ -4,9 +4,9 @@ python3 merge_stage25_all_models_with_actions.py \
   --output_prefix all_models_val_libero10 \
   --write_jsonl \
   --model1_dir /datasets/ssv2_libero_90/stage25_model_1_val_libero10_5k/z_depth_val \
-  --model2_dir /datasets/ssv2_libero_90/stage25_model_2_val_libero10_5k/z_depth_val \
+  --model2_dir /datasets/ssv2_libero_90/stage25_model_2_val_libero10_5k_ssv2/z_depth_val \
   --model3_dir /datasets/ssv2_libero_90/stage25_model_3_val_libero10_5k/z_depth_val \
-  --model4_dir /datasets/ssv2_libero_90/stage25_model_4_val_libero10_5k/z_depth_val \
+  --model4_dir /datasets/ssv2_libero_90/stage25_model_4_val_libero10_5k_ssv2/z_depth_val \
   --model5_dir /datasets/ssv2_libero_90/stage25_model_5_val_libero10_5k/z_depth_val \
   --model6_1_dir /datasets/ssv2_libero_90/stage25_model_6_1_val_libero10_5k/z_depth_val \
   --model7_1_dir /datasets/ssv2_libero_90/stage25_model_7_1_val_libero10_5k/z_depth_val
