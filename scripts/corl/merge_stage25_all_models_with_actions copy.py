@@ -1,5 +1,7 @@
 import argparse
 import json
+import math
+import os
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -35,6 +37,10 @@ def parse_video_id_from_path(path: str) -> str:
 
 
 def parse_video_id_from_id(sample_id: str) -> str:
+    # If id is like:
+    # libero_10_..._demo_demo_0_000000
+    # or video_id/frame style
+    # safer to remove final frame suffix if it exists.
     parts = sample_id.rsplit("_", 1)
 
     if len(parts) == 2 and parts[1].isdigit():
@@ -111,12 +117,11 @@ def load_model_parts(model_name: str, model_dir: Path) -> Dict[str, Dict[str, An
 
             out[sid] = item
 
-        # Sanity check
+        # sanity
         for k, v in pkg.items():
             if torch.is_tensor(v) and v.shape[0] != n:
                 raise ValueError(
-                    f"{model_name} {pt_path.name} key={k} has first dim {v.shape[0]} "
-                    f"but len(ids)={n}"
+                    f"{model_name} {pt_path.name} key={k} has first dim {v.shape[0]} but len(ids)={n}"
                 )
 
     return out
@@ -172,67 +177,6 @@ def make_depth_pair_from_image(image_path: str):
     return [image_path, next_path]
 
 
-def build_optional_model_dirs(args):
-    """
-    model1 is required and used as reference.
-    Other models are optional.
-    """
-
-    candidate_model_dirs = {
-        "model1": args.model1_dir,
-        "model2": args.model2_dir,
-        "model3": args.model3_dir,
-        "model4": args.model4_dir,
-        "model5": args.model5_dir,
-        "model6_1": args.model6_1_dir,
-        "model7_1": args.model7_1_dir,
-        "model8_1": args.model8_1_dir,
-        "model8_2": args.model8_2_dir,
-    }
-
-    model_dirs = {}
-
-    for model_name, model_dir_str in candidate_model_dirs.items():
-        if model_dir_str is None or str(model_dir_str).strip() == "":
-            print(f"[SKIP] {model_name}: no directory provided")
-            continue
-
-        model_dir = Path(model_dir_str)
-
-        if not model_dir.exists():
-            print(f"[SKIP] {model_name}: directory does not exist: {model_dir}")
-            continue
-
-        pt_files = sorted(model_dir.glob("*.pt"))
-        if not pt_files:
-            print(f"[SKIP] {model_name}: no .pt files in {model_dir}")
-            continue
-
-        model_dirs[model_name] = model_dir
-
-    if "model1" not in model_dirs:
-        raise ValueError("model1_dir is required and must contain .pt files.")
-
-    print("\nModels to merge:")
-    for model_name, model_dir in model_dirs.items():
-        print(f"  {model_name}: {model_dir}")
-
-    return model_dirs
-
-
-def build_model_specific_keys(model_dirs):
-    keys = []
-
-    for model_name in model_dirs.keys():
-        keys.extend([
-            f"z_depth_feature_pred_{model_name}",
-            f"z_depth_indices_pred_{model_name}",
-            f"confidence_{model_name}",
-        ])
-
-    return keys
-
-
 # ============================================================
 # Main merge
 # ============================================================
@@ -240,8 +184,7 @@ def build_model_specific_keys(model_dirs):
 def main():
     parser = argparse.ArgumentParser(
         description=(
-            "Merge Stage 2.5 features from available models "
-            "with LIBERO action_vector and magnitude."
+            "Merge Stage 2.5 features from model1-model7 with LIBERO action_vector and magnitude."
         )
     )
 
@@ -284,26 +227,28 @@ def main():
     )
 
     # Model dirs
-    # model1 is required because it is used as reference ID order.
-    # Other models are optional.
     parser.add_argument("--model1_dir", type=str, required=True)
-
-    parser.add_argument("--model2_dir", type=str, default="")
-    parser.add_argument("--model3_dir", type=str, default="")
-    parser.add_argument("--model4_dir", type=str, default="")
-    parser.add_argument("--model5_dir", type=str, default="")
-    parser.add_argument("--model6_1_dir", type=str, default="")
-    parser.add_argument("--model7_1_dir", type=str, default="")
-    parser.add_argument("--model8_1_dir", type=str, default="")
-    parser.add_argument("--model8_2_dir", type=str, default="")
+    parser.add_argument("--model2_dir", type=str, required=True)
+    parser.add_argument("--model3_dir", type=str, required=True)
+    parser.add_argument("--model4_dir", type=str, required=True)
+    parser.add_argument("--model5_dir", type=str, required=True)
+    parser.add_argument("--model6_1_dir", type=str, required=True)
+    parser.add_argument("--model7_1_dir", type=str, required=True)
 
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model_dirs = build_optional_model_dirs(args)
-    model_specific_keys = build_model_specific_keys(model_dirs)
+    model_dirs = {
+        "model1": Path(args.model1_dir),
+        "model2": Path(args.model2_dir),
+        "model3": Path(args.model3_dir),
+        "model4": Path(args.model4_dir),
+        "model5": Path(args.model5_dir),
+        "model6_1": Path(args.model6_1_dir),
+        "model7_1": Path(args.model7_1_dir),
+    }
 
     # ------------------------------------------------------------
     # Load actions
@@ -368,6 +313,7 @@ def main():
     part_infos = []
     part_idx = 0
     total_saved = 0
+
     buffer = []
 
     def flush(force=False):
@@ -423,6 +369,30 @@ def main():
                 pkg[key] = tensor
 
         # Model-specific outputs
+        model_specific_keys = [
+            "z_depth_feature_pred_model1",
+            "z_depth_indices_pred_model1",
+            "confidence_model1",
+
+            "z_depth_feature_pred_model2",
+            "z_depth_indices_pred_model2",
+            "confidence_model2",
+
+            "z_depth_feature_pred_model3",
+            "z_depth_indices_pred_model3",
+            "confidence_model3",
+
+            "z_depth_feature_pred_model4",
+
+            "z_depth_feature_pred_model5",
+
+            "z_depth_feature_pred_model6_1",
+            "z_depth_indices_pred_model6_1",
+            "confidence_model6_1",
+
+            "z_depth_feature_pred_model7_1",
+        ]
+
         for key in model_specific_keys:
             tensor = stack_optional_tensors(buffer, key)
             if tensor is not None:
@@ -492,13 +462,15 @@ def main():
                 "has_z_rgb_feature_input": "z_rgb_feature_input" in merged,
                 "has_z_depth_indices_gt": "z_depth_indices_gt" in merged,
                 "has_z_depth_feature_gt": "z_depth_feature_gt" in merged,
-            }
 
-            for model_name in model_dirs.keys():
-                light_item[f"has_{model_name}"] = (
-                    f"z_depth_feature_pred_{model_name}" in merged
-                    or f"z_depth_indices_pred_{model_name}" in merged
-                )
+                "has_model1": "z_depth_feature_pred_model1" in merged,
+                "has_model2": "z_depth_feature_pred_model2" in merged,
+                "has_model3": "z_depth_feature_pred_model3" in merged,
+                "has_model4": "z_depth_feature_pred_model4" in merged,
+                "has_model5": "z_depth_feature_pred_model5" in merged,
+                "has_model6_1": "z_depth_feature_pred_model6_1" in merged,
+                "has_model7_1": "z_depth_feature_pred_model7_1" in merged,
+            }
 
             jsonl_f.write(json.dumps(light_item, ensure_ascii=False) + "\n")
 
@@ -526,7 +498,6 @@ def main():
         "magnitude_definition": "sqrt(dx^2 + dy^2 + dz^2)",
 
         "model_dirs": {k: str(v) for k, v in model_dirs.items()},
-        "merged_models": list(model_dirs.keys()),
 
         "schema": {
             "metadata": [
@@ -545,7 +516,29 @@ def main():
                 "z_rgb_indices_input",
                 "z_rgb_feature_input",
             ],
-            "stage25_predictions": model_specific_keys,
+            "stage25_predictions": [
+                "z_depth_feature_pred_model1",
+                "z_depth_indices_pred_model1",
+                "confidence_model1",
+
+                "z_depth_feature_pred_model2",
+                "z_depth_indices_pred_model2",
+                "confidence_model2",
+
+                "z_depth_feature_pred_model3",
+                "z_depth_indices_pred_model3",
+                "confidence_model3",
+
+                "z_depth_feature_pred_model4",
+
+                "z_depth_feature_pred_model5",
+
+                "z_depth_feature_pred_model6_1",
+                "z_depth_indices_pred_model6_1",
+                "confidence_model6_1",
+
+                "z_depth_feature_pred_model7_1",
+            ],
         },
 
         "parts": part_infos,
@@ -558,7 +551,6 @@ def main():
     print("\nDone.")
     print("output_dir:", output_dir)
     print("manifest:", manifest_path)
-    print("merged_models:", list(model_dirs.keys()))
     print("total_saved:", total_saved)
     print("num_parts:", len(part_infos))
     print("missing_action:", missing_action)

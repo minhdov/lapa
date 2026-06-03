@@ -1,7 +1,6 @@
 lapa_checkpoints/
 laq/results/
 latent_pretraining/__pycache__/*
-laq/laq_model*
 laq/results_*
 laq/wandb*
 laq/results_
