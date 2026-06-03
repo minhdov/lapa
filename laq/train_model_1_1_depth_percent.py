@@ -46,7 +46,7 @@ assert 0 < args.data_percent <= 100, "data_percent must be in (0, 100]"
 
 depth_path = args.depth_path
 
-results_folder = f"results/model_1_1_depth_ssv2_25k_percent_{int(args.data_percent)}"
+results_folder = f"/outputs/results/model_1_1_depth_ssv2_25k_percent_{int(args.data_percent)}"
 
 laq = LatentActionQuantization(
     dim=1024,

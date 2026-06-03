@@ -61,6 +61,28 @@ docker run --gpus all -it \
   -w /workspace/lapa \
   lapa-depth:latest bash
 
+docker run --gpus all -it \
+  --name lapa_depth_dev3 \
+  --ipc=host \
+  -v $PWD:/workspace/lapa \
+  -v /home/minh/workspace/philo/datasets:/datasets \
+  -v /mnt/storage_backup/data_sets/minh/philo/checkpoints:/checkpoints \
+  -v /storage_3090/minh/philo/outputs:/outputs \
+  -w /workspace/lapa \
+  lapa-depth:latest bash
+
+docker run --gpus all -it \
+  --name lapa_depth_dev4_model2 \
+  --ipc=host \
+  -v $PWD:/workspace/lapa \
+  -v /storage_3090/minh/philo/datasets:/datasets \
+  -v /mnt/storage_backup/data_sets/minh/philo/checkpoints:/checkpoints \
+  -v /storage_3090/minh/philo/outputs:/outputs \
+  -w /workspace/lapa \
+  lapa-depth:latest bash
+
+
+
   /home/minh/workspace/philo/datasets
 3. Launch new docker
 docker exec -it lapa_depth_dev bash

@@ -31,13 +31,13 @@ def parse_args():
     parser.add_argument(
         "--z_rgb_feature_manifest",
         type=str,
-        default="/datasets/ssv2_libero90/stage1_model1_1_depth_ssv2/features/z_rgb_train_all_manifest.json",
+        default="/datasets/ssv2_libero90/stage2_rgb_ssv2/features/z_rgb_train_all_manifest.json",
     )
 
     parser.add_argument(
         "--z_depth_path",
         type=str,
-        default="/datasets/ssv2_libero90/stage1_model1_1_depth_ssv2/z_depth_train.jsonl",
+        default="z_depth_train.jsonl",
     )
 
     parser.add_argument(
